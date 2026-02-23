@@ -185,7 +185,7 @@ The **wrapped representation** of KESY on Sepolia.
 
 | Contract | Chain | Address |
 |----------|-------|---------|
-| **BridgeSender** | Hedera Testnet | [`0x96e33252bF39a4cCDb683097238b1cd8baF194F3`](https://hashscan.io/testnet/contract/0x96e33252bF39a4cCDb683097238b1cd8baF194F3) |
+| **BridgeSender** | Hedera Testnet | [`0xdD8f518292573aF74357D1FdE2F2BB13440c2023`](https://hashscan.io/testnet/contract/0xdD8f518292573aF74357D1FdE2F2BB13440c2023) |
 | **BridgeReceiver** | Sepolia | [`0x55C6bf3481Fc9830016e3F22c69abB919d439daD`](https://sepolia.etherscan.io/address/0x55C6bf3481Fc9830016e3F22c69abB919d439daD) |
 | **wKESY** | Sepolia | [`0x52b8bbc75dfdb9c4ff067585d35f38b5bfa322a1`](https://sepolia.etherscan.io/address/0x52b8bbc75dfdb9c4ff067585d35f38b5bfa322a1) |
 
