@@ -154,4 +154,16 @@ contract BridgeSender is Ownable {
         uint256 balance = IERC20(_tokenAddress).balanceOf(address(this));
         IERC20(_tokenAddress).safeTransfer(_to, balance);
     }
+
+    /**
+     * @notice Associates the contract with a Hedera HTS token.
+     * @dev Required for Hedera tokens before the contract can receive them.
+     * @param _token The address of the HTS token.
+     */
+    function associateToken(address _token) external onlyOwner {
+        (bool success, bytes memory result) = address(0x167).call(
+            abi.encodeWithSignature("associateToken(address,address)", address(this), _token)
+        );
+        require(success && (result.length == 0 || abi.decode(result, (int32)) == 22), "Association failed");
+    }
 }

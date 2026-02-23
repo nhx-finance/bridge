@@ -599,7 +599,7 @@ timeline
 
 <div align="center">
 
-**Built with ❤️ using Chainlink CCIP & Foundry**
+**NHX Finance - KESY Bridge**
 
 [Chainlink CCIP Docs](https://docs.chain.link/ccip) · [Foundry Book](https://book.getfoundry.sh) · [CCIP Explorer](https://ccip.chain.link)
 
