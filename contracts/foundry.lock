@@ -1,0 +1,17 @@
+{
+  "lib/chainlink-ccip": {
+    "rev": "0e3e0fc5c0f70f0d50dca66b139142ddf3009294"
+  },
+  "lib/chainlink-local": {
+    "tag": {
+      "name": "v0.2.7",
+      "rev": "a3ace4e17336e84c4d1261f2da45d5e8963af714"
+    }
+  },
+  "lib/openzeppelin-contracts": {
+    "tag": {
+      "name": "v5.0.2",
+      "rev": "dbb6104ce834628e473d2173bbc9d47f81a9eec3"
+    }
+  }
+}

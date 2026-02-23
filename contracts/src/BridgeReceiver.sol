@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {CCIPReceiver} from "@chainlink/contracts-ccip/src/v0.8/ccip/applications/CCIPReceiver.sol";
-import {Client} from "@chainlink/contracts-ccip/src/v0.8/ccip/libraries/Client.sol";
-import {OwnerIsCreator} from "@chainlink/contracts-ccip/src/v0.8/shared/access/OwnerIsCreator.sol";
+import {CCIPReceiver} from "@chainlink/contracts-ccip/contracts/applications/CCIPReceiver.sol";
+import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 interface IwKESY {
     function mint(address _to, uint256 _amount) external;
@@ -13,7 +13,7 @@ interface IwKESY {
  * @title BridgeReceiver
  * @dev Deployed on Ethereum Sepolia. Handles receiving CCIP message and minting tokens.
  */
-contract BridgeReceiver is CCIPReceiver, OwnerIsCreator {
+contract BridgeReceiver is CCIPReceiver, Ownable {
     error SourceChainNotAllowlisted(uint64 sourceChainSelector);
     error SenderNotAllowlisted(bytes sender);
 
@@ -30,7 +30,7 @@ contract BridgeReceiver is CCIPReceiver, OwnerIsCreator {
         uint256 amount
     );
 
-    constructor(address _router, address _wkesy) CCIPReceiver(_router) {
+    constructor(address _router, address _wkesy) CCIPReceiver(_router) Ownable(msg.sender) {
         s_wkesyToken = IwKESY(_wkesy);
     }
 
