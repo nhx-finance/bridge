@@ -4,3 +4,4 @@ kesy-bridge/node_modules
 .env
 .env.local
 .env.local.example
+contracts/lib/openzeppelin-contracts
