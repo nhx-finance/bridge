@@ -1,79 +1,48 @@
-# KESY Cross-Chain Bridging Architecture (Testnet)
+# KESY Bi-Directional OmniBridge Architecture (Testnet)
 
 ## Overview
 
-This document describes the current KESY bridging stack between **Hedera EVM Testnet** and **Ethereum Sepolia** using Chainlink CCIP. The design intentionally ships with a **messaging-only fallback** because Hedera Testnet does **not yet expose CCIP Cross-Chain Token (CCT) pools** in the public directory. As soon as LockRelease/BurnMint pools are available on this lane, we will upgrade to the native CCT path.
+This document describes the upgraded **OmniBridge** architecture connecting **Hedera EVM Testnet** and **Ethereum Sepolia** (and arbitrarily more EVM chains) using Chainlink CCIP. 
 
-## Supported Path (Currently)
+Because Hedera Testnet does not yet expose CCIP Cross-Chain Token (CCT) pools (due to Hedera Token Service complexities), we have built a custom **Hub-and-Spoke OmniBridge**. Hedera acts as the central Hub locking and unlocking native HTS tokens, while EVM chains act as Spokes burning and minting wrapped ERC-20 tokens.
 
-- **Direction:** Hedera Testnet → Ethereum Sepolia (one-way)
-- **Mechanism:** CCIP Arbitrary Messaging (no token pools)
-- **Tokens:**
-  - KESY (Hedera) — existing live token at `0x00000000000000000000000000000000006e4dc3`
-  - wKESY (Sepolia) — wrapped representation minted on receipt
-- **Fee token:** LINK
-  - Hedera LINK: `0x90a386d59b9A6a4795a011e8f032Fc21ED6FEFb6`
-  - Sepolia LINK: `0x779877A7B0D9E8603169DdbD7836e478b4624789`
-- **Routers:**
-  - Hedera router: `0x802C5F84eAD128Ff36fD6a3f8a418e339f467Ce4`
-  - Sepolia router: `0x0BF3dE8c5D3e8A2B34D2BEeB17ABfCeBaf363A59`
-- **Chain selectors:**
-  - Hedera Testnet: `222782988166878823`
-  - Ethereum Sepolia: `16015286601757825753`
+## Hub-and-Spoke Model
 
-## Contracts in Scope (Messaging Fallback)
+- **The Hub (Hedera Testnet):**
+  - Holds the real KESY tokens in a smart contract vault.
+  - *Outbound (Hub → Spoke):* Locks KESY tokens and dispatches a CCIP message to mint wKESY on the destination.
+  - *Inbound (Spoke → Hub):* Receives a CCIP message and unlocks real KESY tokens back to the user.
+- **The Spokes (EVM Chains like Sepolia):**
+  - Hold no real KESY, only wrapped tokens (`wKESY`).
+  - *Outbound (Spoke → Hub):* Burns the user's `wKESY` and dispatches a CCIP message to unlock KESY on the Hub.
+  - *Inbound (Hub → Spoke):* Receives a CCIP message and mints new `wKESY` to the user.
 
-- **BridgeSender (Hedera):**
-  - Locks KESY via `transferFrom`.
-  - Builds `EVM2AnyMessage` with encoded mint instructions in `data` (tokenAmounts empty).
-  - Fetches dynamic fee via `getFee` and pays in LINK.
-  - Emits `MessageSent` for UI/monitoring.
-  - Dynamic allowlists: destination selectors and receiver bytes; supports arbitrary chains.
-  - Dynamic `extraArgs`: stored per selector or passed per call (gas tuning per destination).
-- **BridgeReceiver (Sepolia):**
-  - Inherits `CCIPReceiver`; only the router can deliver.
-  - Allows only allowlisted source selector + sender bytes.
-  - Decodes `(user, amount)` from `data` and mints wKESY.
-  - Emits `MessageReceived` for tracking.
-- **wKESY (Sepolia):**
-  - ERC20 with `MINTER_ROLE` granted to BridgeReceiver (in fallback mode).
-  - Will be swapped to CCIP’s pre-audited `BurnMintERC20` when CCT pools go live.
+## Unified Smart Contract: `KESYOmniBridge.sol`
 
-## What’s Deliberately Deferred (Pending Hedera CCT Pools)
+Both the Hub and the Spoke share the exact same `KESYOmniBridge.sol` contract logic, differentiated only by a deployment flag `isHub`.
+- If `isHub == true`, the contract uses `transferFrom` and `transfer` to lock and unlock real tokens.
+- If `isHub == false`, the contract uses `burnFrom` and `mint` to destroy and create wrapped tokens.
 
-- **LockReleaseTokenPool (Hedera) + BurnMintTokenPool (Sepolia):** Not listed in the Hedera Testnet CCIP directory; CCT support marked “in progress.”
-- **TokenAdminRegistry + RegistryModuleOwnerCustom registration:** Requires pool availability and token admin proof; deferred to avoid broken wiring.
-- **Rate limits in pools:** Will be enforced once pools are active (per-hour/per-day caps).
-- **Return path (Sepolia → Hedera):** Burn-and-unlock flow will be added with pools or a mirror messaging path.
-- **Permit-based UX:** Current flow uses approve + transferFrom; permits can be added later.
+### Security Posture
+- **Router-gated delivery:** `onlyRouter` enforces that CCIP messages strictly come from Chainlink.
+- **Strict Allowlists:** `onlyAllowlistedSource` and `onlyAllowlistedSender` ensures Spokes only respect messages from the Hub, and vice versa.
+- **Dynamic `extraArgs`:** Gas limits are never hardcoded; they are updated dynamically per chain by the bridge admin.
+- **Dynamic Fees:** Bridges call `getFee()` on the router before every dispatch, guaranteeing accurate gas payments in LINK.
 
-## Security Posture
+## ⚠️ Critical UX Requirement: Hedera Token Association
 
-- Router-gated delivery (`onlyRouter` in receiver).
-- Source/destination allowlists by chain selector and sender/receiver bytes (agnostic to EVM vs non-EVM addressing).
-- Dynamic `extraArgs` per chain to avoid hardcoded gas assumptions.
-- Fees are always quoted on-chain via `getFee` before send.
-- Admin-controlled withdrawal of stuck tokens; no uncontrolled minting.
+Bridging from an EVM Spoke *back* to the Hedera Hub introduces a unique interaction hurdle: **Hedera Token Association**.
 
-## Migration Plan to Full CCT (When Available)
+On Hedera, a wallet or contract cannot receive a token it hasn't explicitly "associated" with. If a user on Sepolia burns 100 wKESY to bridge it to a brand new Hedera wallet, the CCIP message will arrive on Hedera, attempt to transfer the unlocked KESY to the user, and **revert**. 
 
-1. Confirm CCT pool availability for Hedera ↔ Sepolia in the CCIP directory.
-2. Assert token authority: KESY owner/admin on Hedera and wKESY admin on Sepolia.
-3. Deploy pools:
-   - LockReleaseTokenPool on Hedera for KESY locking + outbound rate limits.
-   - BurnMintTokenPool on Sepolia with mint/burn rights on wKESY.
-4. Register tokens and pools in TokenAdminRegistry/RegistryModuleOwnerCustom; configure rate limits and fee token settings.
-5. Gradually switch UI to pool-based transfers while keeping messaging fallback as a guardrail.
-6. Add the return path (Sepolia → Hedera) via burn-and-unlock once pools are active.
+**The Solution:**
+This must be handled by the Frontend UI.
+1. The UI checks the user's connected Hedera account against the Mirror Node API.
+2. If the user's account is NOT associated with the KESY token ID, the "Bridge" button on the EVM side is disabled.
+3. The user is prompted to sign an "Associate KESY" transaction via their Hedera wallet (e.g., HashPack).
+4. Once associated, the "Bridge" button unlocks, and the user can safely dispatch their cross-chain transaction knowing it will land successfully.
 
-## User-Facing Expectations (While on Messaging Fallback)
-
-- Direction supported: Hedera → Ethereum Sepolia only.
-- Users need KESY + LINK on Hedera for the send; receive wKESY on Sepolia.
-- Status can be tracked via `MessageSent` (Hedera) and `MessageReceived` (Sepolia), plus CCIP status APIs.
-
-## Rationale for Shipping Now
-
-- The messaging path is production-grade for authenticated, allowlisted, router-delivered messages.
-- Avoids blocking on Hedera’s pending CCT pool enablement while keeping an upgrade path open.
-- Architecture is chain-selector and address-format agnostic, enabling future expansion to additional CCIP-supported networks.
+## Migration to Native CCIP CCT Pools
+When Chainlink releases full Cross-Chain Token (CCT) pools for Hedera that natively handle `0x167` precompiles and association overheads, this custom infrastructure can be retired:
+1. `wKESY` was built using the CCIP `BurnMintERC20` standard. The admin can simply revoke the OmniBridge's `BURNER_ROLE` and `MINTER_ROLE` and grant them to the official Chainlink `BurnMintTokenPool`.
+2. Hedera KESY liquidity currently locked in the OmniBridge Vault can be migrated to the official Chainlink `LockReleaseTokenPool`.

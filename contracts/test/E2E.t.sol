@@ -1,129 +1,125 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
-import {
-    CCIPLocalSimulator,
-    IRouterClient,
-    LinkToken
-} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
-import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
-import {BridgeSender} from "../src/BridgeSender.sol";
-import {BridgeReceiver} from "../src/BridgeReceiver.sol";
-import {KESY} from "../src/KESY.sol";
+import {Test, console} from "forge-std/Test.sol";
+import {CCIPLocalSimulator, IRouterClient} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
+import {BurnMintERC677Helper} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
+import {LinkToken} from "@chainlink/local/src/shared/LinkToken.sol";
+import {KESYOmniBridge} from "../src/KESYOmniBridge.sol";
 import {wKESY} from "../src/wKESY.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/**
- * @title E2E Bridge Test
- * @notice Full end-to-end: User bridges KESY → CCIP message auto-delivered →
- *         BridgeReceiver mints wKESY to user.
- * @dev Uses CCIPLocalSimulator which auto-delivers messages within a single tx.
- */
+contract MockKESY is ERC20 {
+    constructor() ERC20("KESY", "KESY") {}
+    function mint(address to, uint256 amount) public {
+        _mint(to, amount);
+    }
+}
+
 contract E2ETest is Test {
-    CCIPLocalSimulator public ccipSimulator;
-    BridgeSender public sender;
-    BridgeReceiver public receiver;
-    KESY public kesy;
-    wKESY public wkesy;
-
-    IRouterClient public router;
-    LinkToken public linkToken;
+    CCIPLocalSimulator public ccipLocalSimulator;
+    
+    // Chains
     uint64 public chainSelector;
+    
+    // Tokens
+    IERC20 public linkToken;
+    MockKESY public nativeKesy;
+    wKESY public wrappedKesy;
 
-    address public deployer;
-    address public user;
+    // Bridges
+    KESYOmniBridge public hederaBridge;
+    KESYOmniBridge public sepoliaBridge;
+
+    // Users
+    address public user = makeAddr("user");
 
     function setUp() public {
-        deployer = address(this);
-        user = makeAddr("user");
+        ccipLocalSimulator = new CCIPLocalSimulator();
+        
+        // Setup CCIP simulator context
+        (
+            uint64 _chainSelector,
+            IRouterClient sourceRouter,
+            IRouterClient destinationRouter,
+            ,
+            LinkToken linkToken_,
+            ,
+            
+        ) = ccipLocalSimulator.configuration();
+        
+        chainSelector = _chainSelector;
+        linkToken = IERC20(address(linkToken_));
 
-        // 1. Deploy CCIP simulator
-        ccipSimulator = new CCIPLocalSimulator();
-        (uint64 selector, IRouterClient sourceRouter,,, LinkToken link,,) = ccipSimulator.configuration();
-        chainSelector = selector;
-        router = sourceRouter;
-        linkToken = link;
+        // Deploy Tokens
+        nativeKesy = new MockKESY();
+        wrappedKesy = new wKESY();
 
-        // 2. Deploy tokens
-        kesy = new KESY();
-        wkesy = new wKESY();
+        // Deploy Bridges
+        // Notice we pass the same router for both since LocalSimulator mocks a single environment
+        hederaBridge = new KESYOmniBridge(address(sourceRouter), address(linkToken), address(nativeKesy), true);
+        sepoliaBridge = new KESYOmniBridge(address(destinationRouter), address(linkToken), address(wrappedKesy), false);
 
-        // 3. Deploy bridge contracts
-        sender = new BridgeSender(address(router), address(linkToken), address(kesy));
-        receiver = new BridgeReceiver(address(router), address(wkesy));
+        // Sepolia Spoke setup: give bridge rights to mint/burn wKESY
+        wrappedKesy.grantRole(wrappedKesy.MINTER_ROLE(), address(sepoliaBridge));
+        wrappedKesy.grantRole(wrappedKesy.BURNER_ROLE(), address(sepoliaBridge));
 
-        // 4. Configure permissions
-        wkesy.grantRole(wkesy.MINTER_ROLE(), address(receiver));
+        // Configure Allowlists for both directions
+        hederaBridge.allowlistDestinationChain(chainSelector, true);
+        hederaBridge.allowlistReceiver(chainSelector, abi.encode(address(sepoliaBridge)), true);
+        
+        sepoliaBridge.allowlistSourceChain(chainSelector, true);
+        sepoliaBridge.allowlistSender(chainSelector, abi.encode(address(hederaBridge)), true);
 
-        // 5. Configure allowlists on sender
-        bytes memory receiverBytes = abi.encode(address(receiver));
-        sender.allowlistDestinationChain(chainSelector, true);
-        sender.allowlistReceiver(chainSelector, receiverBytes, true);
+        sepoliaBridge.allowlistDestinationChain(chainSelector, true);
+        sepoliaBridge.allowlistReceiver(chainSelector, abi.encode(address(hederaBridge)), true);
+        
+        hederaBridge.allowlistSourceChain(chainSelector, true);
+        hederaBridge.allowlistSender(chainSelector, abi.encode(address(sepoliaBridge)), true);
 
-        bytes memory extraArgs = Client._argsToBytes(
-            Client.GenericExtraArgsV2({gasLimit: 200_000, allowOutOfOrderExecution: true})
-        );
-        sender.setDefaultExtraArgs(chainSelector, extraArgs);
+        // Extra args
+        bytes memory extraArgs = hex"97a657c90000000000000000000000000000000000000000000000000000000000030d40";
+        hederaBridge.setDefaultExtraArgs(chainSelector, extraArgs);
+        sepoliaBridge.setDefaultExtraArgs(chainSelector, extraArgs);
 
-        // 6. Configure allowlists on receiver
-        receiver.allowlistSourceChain(chainSelector, true);
-        receiver.allowlistSender(chainSelector, abi.encode(address(sender)), true);
+        // Distribute LINK tokens for fees
+        ccipLocalSimulator.requestLinkFromFaucet(address(hederaBridge), 10e18);
+        ccipLocalSimulator.requestLinkFromFaucet(address(sepoliaBridge), 10e18);
 
-        // 7. Fund sender with LINK
-        ccipSimulator.requestLinkFromFaucet(address(sender), 10 ether);
-
-        // 8. Give user KESY tokens
-        kesy.mint(user, 5_000e18);
+        // User gets raw KESY to start
+        nativeKesy.mint(user, 1000e18);
     }
 
-    function test_fullBridgeFlow() public {
-        uint256 bridgeAmount = 1_000e18;
+    function test_roundTripBridge() public {
+        uint256 bridgeAmount = 100e18;
 
-        // Pre-state
-        assertEq(kesy.balanceOf(user), 5_000e18);
-        assertEq(wkesy.balanceOf(user), 0);
-
-        // User approves and bridges
+        // --- Step 1: Hedera -> Sepolia ---
         vm.startPrank(user);
-        kesy.approve(address(sender), bridgeAmount);
-        sender.bridgeKESY(chainSelector, abi.encode(address(receiver)), bridgeAmount);
+        nativeKesy.approve(address(hederaBridge), bridgeAmount);
+        
+        uint256 hederaBalBefore = nativeKesy.balanceOf(user);
+        uint256 sepoliaBalBefore = wrappedKesy.balanceOf(user);
+
+        hederaBridge.bridgeKESY(chainSelector, abi.encode(address(sepoliaBridge)), bridgeAmount);
         vm.stopPrank();
 
-        // Post-state: KESY locked in sender
-        assertEq(kesy.balanceOf(user), 5_000e18 - bridgeAmount);
-        assertEq(kesy.balanceOf(address(sender)), bridgeAmount);
+        // LocalSimulator auto-routes it
 
-        // Post-state: wKESY minted to user via auto-delivered CCIP message
-        assertEq(wkesy.balanceOf(user), bridgeAmount);
-    }
+        assertEq(nativeKesy.balanceOf(user), hederaBalBefore - bridgeAmount, "Hedera balance didn't decrease");
+        assertEq(nativeKesy.balanceOf(address(hederaBridge)), bridgeAmount, "Hedera bridge didn't lock");
+        assertEq(wrappedKesy.balanceOf(user), sepoliaBalBefore + bridgeAmount, "Sepolia wKESY didn't mint");
 
-    function test_fullBridgeFlow_multipleBridges() public {
+        // --- Step 2: Sepolia -> Hedera ---
         vm.startPrank(user);
-        kesy.approve(address(sender), type(uint256).max);
+        wrappedKesy.approve(address(sepoliaBridge), bridgeAmount);
 
-        bytes memory receiverBytes = abi.encode(address(receiver));
-
-        // Bridge 3 times
-        sender.bridgeKESY(chainSelector, receiverBytes, 100e18);
-        sender.bridgeKESY(chainSelector, receiverBytes, 200e18);
-        sender.bridgeKESY(chainSelector, receiverBytes, 300e18);
+        sepoliaBridge.bridgeKESY(chainSelector, abi.encode(address(hederaBridge)), bridgeAmount);
         vm.stopPrank();
 
-        // Total: 600 KESY locked, 600 wKESY minted
-        assertEq(kesy.balanceOf(address(sender)), 600e18);
-        assertEq(wkesy.balanceOf(user), 600e18);
-        assertEq(kesy.balanceOf(user), 5_000e18 - 600e18);
-    }
-
-    function testFuzz_fullBridgeFlow(uint256 amount) public {
-        amount = bound(amount, 1, 5_000e18);
-
-        vm.startPrank(user);
-        kesy.approve(address(sender), amount);
-        sender.bridgeKESY(chainSelector, abi.encode(address(receiver)), amount);
-        vm.stopPrank();
-
-        assertEq(kesy.balanceOf(address(sender)), amount);
-        assertEq(wkesy.balanceOf(user), amount);
+        // Verification
+        assertEq(wrappedKesy.balanceOf(user), 0, "wKESY not burned");
+        assertEq(nativeKesy.balanceOf(user), hederaBalBefore, "Hedera native balance not restored");
+        assertEq(nativeKesy.balanceOf(address(hederaBridge)), 0, "Hedera bridge vault not empty");
     }
 }

@@ -45,20 +45,32 @@ contract wKESYTest is Test {
 
     // ─── Burn ───────────────────────────────────────────────
 
-    function test_burn_byHolder() public {
+    function test_burnFrom_byBurnerRole() public {
+        address burner = makeAddr("burner");
+        token.grantRole(token.BURNER_ROLE(), burner);
+
         vm.prank(minter);
         token.mint(user, 500e18);
 
         vm.prank(user);
-        token.burn(user, 200e18);
+        token.approve(burner, 200e18);
+
+        vm.prank(burner);
+        token.burnFrom(user, 200e18);
 
         assertEq(token.balanceOf(user), 300e18);
     }
 
-    function test_burn_revertsIfInsufficientBalance() public {
+    function test_burnFrom_revertsIfInsufficientBalance() public {
+        address burner = makeAddr("burner");
+        token.grantRole(token.BURNER_ROLE(), burner);
+
         vm.prank(user);
+        token.approve(burner, 1);
+
+        vm.prank(burner);
         vm.expectRevert();
-        token.burn(user, 1);
+        token.burnFrom(user, 1);
     }
 
     // ─── Access Control ─────────────────────────────────────
