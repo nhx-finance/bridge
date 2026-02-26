@@ -372,7 +372,7 @@ function toHex(value2, opts = {}) {
   }
   if (typeof value2 === "boolean")
     return boolToHex(value2, opts);
-  return bytesToHex2(value2, opts);
+  return bytesToHex(value2, opts);
 }
 function boolToHex(value2, opts = {}) {
   const hex = `0x${Number(value2)}`;
@@ -382,7 +382,7 @@ function boolToHex(value2, opts = {}) {
   }
   return hex;
 }
-function bytesToHex2(value2, opts = {}) {
+function bytesToHex(value2, opts = {}) {
   let string = "";
   for (let i2 = 0;i2 < value2.length; i2++) {
     string += hexes[value2[i2]];
@@ -424,7 +424,7 @@ function numberToHex(value_, opts = {}) {
 }
 function stringToHex(value_, opts = {}) {
   const value2 = encoder.encode(value_);
-  return bytesToHex2(value2, opts);
+  return bytesToHex(value2, opts);
 }
 var hexes;
 var encoder;
@@ -1451,6 +1451,19 @@ var init_encodeFunctionData = __esm(() => {
   init_encodeAbiParameters();
   init_prepareEncodeFunctionData();
 });
+function formatUnits(value2, decimals) {
+  let display = value2.toString();
+  const negative = display.startsWith("-");
+  if (negative)
+    display = display.slice(1);
+  display = display.padStart(decimals, "0");
+  let [integer, fraction] = [
+    display.slice(0, display.length - decimals),
+    display.slice(display.length - decimals)
+  ];
+  fraction = fraction.replace(/(0+)$/, "");
+  return `${negative ? "-" : ""}${integer || "0"}${fraction ? `.${fraction}` : ""}`;
+}
 function isMessage(arg, schema) {
   const isMessage2 = arg !== null && typeof arg == "object" && "$typeName" in arg && typeof arg.$typeName == "string";
   if (!isMessage2) {
@@ -5316,22 +5329,6 @@ var hexToBytes = (hexStr) => {
   }
   return bytes;
 };
-var bytesToHex = (bytes) => {
-  return `0x${Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-};
-var hexToBase64 = (hex) => {
-  const cleanHex = hex.startsWith("0x") ? hex.slice(2) : hex;
-  if (cleanHex.length === 0) {
-    return "";
-  }
-  if (cleanHex.length % 2 !== 0) {
-    throw new Error(`Hex string must have an even number of characters: ${hex}`);
-  }
-  if (!/^[0-9a-fA-F]*$/.test(cleanHex)) {
-    throw new Error(`Invalid hex string: ${hex}`);
-  }
-  return Buffer.from(cleanHex, "hex").toString("base64");
-};
 function createWriteCreReportRequest(input) {
   return {
     receiver: hexToBytes(input.receiver),
@@ -7103,6 +7100,11 @@ var LAST_FINALIZED_BLOCK_NUMBER = {
 var LATEST_BLOCK_NUMBER = {
   absVal: Buffer.from([2]).toString("base64"),
   sign: "-1"
+};
+var decodeJson = (input) => {
+  const decoder = new TextDecoder("utf-8");
+  const textBody = decoder.decode(input);
+  return JSON.parse(textBody);
 };
 function sendReport(runtime, report, fn) {
   const rawReport = report.x_generatedCodeOnly_unwrap();
@@ -15660,101 +15662,256 @@ var sendErrorResponse = (error) => {
 };
 init_encodeFunctionData();
 init_getAddress();
-var RejectPolicyABI = [
+var BridgeABI = [
   {
     type: "function",
-    name: "rejectAddress",
+    name: "bridgeKESY",
     inputs: [
-      { name: "account", type: "address" }
+      { name: "destinationChainSelector", type: "uint64" },
+      { name: "receiver", type: "bytes" },
+      { name: "amount", type: "uint256" }
     ],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
-    type: "function",
-    name: "unrejectAddress",
-    inputs: [
-      { name: "account", type: "address" }
-    ],
-    outputs: [],
+    outputs: [{ name: "messageId", type: "bytes32" }],
     stateMutability: "nonpayable"
   }
 ];
-var onComplianceSyncTrigger = (runtime2) => {
+var ERC20ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view"
+  },
+  {
+    type: "function",
+    name: "allowance",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" }
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view"
+  }
+];
+var RejectPolicyABI = [
+  {
+    type: "function",
+    name: "addressRejected",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view"
+  }
+];
+var CHAIN_SELECTORS = {
+  sepolia: "16015286601757825753",
+  hedera: "222782988166878823"
+};
+var onAgenticBridge = (runtime2, payload) => {
   const config = runtime2.config;
-  runtime2.log("=== KESY Compliance Sync Workflow Triggered ===");
-  runtime2.log(`Mirror Node: ${config.hederaMirrorUrl}`);
-  runtime2.log(`KESY Token: ${config.hederaKesyTokenId}`);
-  runtime2.log(`RejectPolicy: ${config.rejectPolicyAddress}`);
-  runtime2.log(`
-[Step 1] Fetching freeze events from Hedera Mirror Node...`);
-  const frozenAccounts = runtime2.runInNodeMode((nodeRuntime) => {
-    const httpClient = new cre.capabilities.HTTPClient;
-    const url = `${config.hederaMirrorUrl}/api/v1/tokens/${config.hederaKesyTokenId}/balances?account.balance=0&limit=10`;
-    runtime2.log(`Fetching: ${url}`);
-    const response = httpClient.sendRequest(nodeRuntime, {
-      url,
-      method: "GET"
-    }).result();
-    const body = new TextDecoder().decode(response.body);
-    const data = JSON.parse(body);
-    const accounts = [];
-    if (data.balances) {
-      for (const entry of data.balances) {
-        if (entry.balance === 0 && entry.account) {
-          accounts.push(entry.account);
-        }
-      }
-    }
-    return accounts.length;
-  }, consensusMedianAggregation())().result();
-  runtime2.log(`Found ${frozenAccounts} potentially frozen accounts`);
-  if (frozenAccounts !== 0) {
-    runtime2.log("No frozen accounts to propagate. Done.");
-    return "No updates needed";
+  const request = decodeJson(payload.input);
+  runtime2.log("=== Agentic Bridging Workflow Triggered ===");
+  runtime2.log(`Source: ${request.sourceChain} → Dest: ${request.destChain}`);
+  runtime2.log(`Amount: ${request.amount} KESY`);
+  runtime2.log(`Sender: ${request.senderAddress}`);
+  runtime2.log(`Receiver: ${request.receiverAddress}`);
+  const src = request.sourceChain.toLowerCase();
+  const dst = request.destChain.toLowerCase();
+  if (src === "hedera") {
+    runtime2.log("⚠️ Hedera → EVM simulation not available (Tenderly does not support Hedera Virtual TestNets)");
+    const earlyResult = JSON.stringify({
+      status: "unsupported",
+      direction: `${src} → ${dst}`,
+      message: "Simulation for Hedera → EVM bridges is not available yet. Tenderly Virtual TestNets do not support Hedera. The bridge would lock KESY on Hedera Hub and mint wKESY on the destination EVM chain via CCIP. Please proceed with the actual bridge — your tokens are protected by Chainlink ACE policies on the destination chain.",
+      recommendation: "proceed_with_actual_bridge"
+    });
+    return earlyResult;
+  }
+  if (!CHAIN_SELECTORS[dst]) {
+    return JSON.stringify({
+      status: "error",
+      message: `Unknown destination chain: ${dst}. Supported: ${Object.keys(CHAIN_SELECTORS).join(", ")}`
+    });
   }
   runtime2.log(`
-[Step 2] Propagating freeze status to Sepolia ACE RejectPolicy...`);
-  const demoFrozenAddress = getAddress("0x0000000000000000000000000000000000000000");
-  const calldata = encodeFunctionData({
-    abi: RejectPolicyABI,
-    functionName: "rejectAddress",
-    args: [demoFrozenAddress]
+[Step 1] Direction validated: ${src} → ${dst} (EVM → Hedera/EVM)`);
+  runtime2.log(`
+[Step 2] Running pre-flight checks on Tenderly Virtual TestNet...`);
+  const amountRaw = BigInt(parseFloat(request.amount) * 1e6).toString(16).padStart(64, "0");
+  const senderAddr = request.senderAddress.toLowerCase().replace("0x", "").padStart(64, "0");
+  const balanceCalldata = encodeFunctionData({
+    abi: ERC20ABI,
+    functionName: "balanceOf",
+    args: [getAddress(request.senderAddress)]
   });
-  runtime2.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
-  const reportResponse = runtime2.report({
-    encodedPayload: hexToBase64(calldata),
-    encoderName: "evm",
-    signingAlgo: "ecdsa",
-    hashingAlgo: "keccak256"
-  }).result();
-  runtime2.log("DON-signed report generated");
-  const evmClient = new cre.capabilities.EVMClient(BigInt(config.sepoliaChainSelector));
-  const resp = evmClient.writeReport(runtime2, {
-    receiver: config.rejectPolicyAddress,
-    report: reportResponse,
-    gasConfig: {
-      gasLimit: "200000"
+  const rejectCalldata = encodeFunctionData({
+    abi: RejectPolicyABI,
+    functionName: "addressRejected",
+    args: [getAddress(request.senderAddress)]
+  });
+  const receiverRejectCalldata = encodeFunctionData({
+    abi: RejectPolicyABI,
+    functionName: "addressRejected",
+    args: [getAddress(request.receiverAddress)]
+  });
+  const preflightResults = runtime2.runInNodeMode((nodeRuntime) => {
+    const httpClient = new cre.capabilities.HTTPClient;
+    const ethCall = (to, data) => {
+      const response2 = httpClient.sendRequest(nodeRuntime, {
+        url: config.tenderlyRpcUrl,
+        method: "POST",
+        body: new TextEncoder().encode(JSON.stringify({
+          jsonrpc: "2.0",
+          method: "eth_call",
+          params: [{ to, data }, "latest"],
+          id: 1
+        })),
+        headers: { "Content-Type": "application/json" }
+      }).result();
+      const body = new TextDecoder().decode(response2.body);
+      const parsed = JSON.parse(body);
+      return parsed.result || parsed.error?.message || "error";
+    };
+    const balanceResult = ethCall(config.wKesyAddress, balanceCalldata);
+    const senderRejected = ethCall(config.rejectPolicyAddress, rejectCalldata);
+    const receiverRejected = ethCall(config.rejectPolicyAddress, receiverRejectCalldata);
+    return `${balanceResult}|${senderRejected}|${receiverRejected}`;
+  }, consensusMedianAggregation())().result();
+  runtime2.log(`Pre-flight results: ${preflightResults}`);
+  const [balanceHex, senderRejectedHex, receiverRejectedHex] = String(preflightResults).split("|");
+  const balance = balanceHex !== "error" ? BigInt(balanceHex) : BigInt(0);
+  const senderBlacklisted = senderRejectedHex !== "error" && senderRejectedHex.endsWith("1");
+  const receiverBlacklisted = receiverRejectedHex !== "error" && receiverRejectedHex.endsWith("1");
+  const amountWei = BigInt(parseFloat(request.amount) * 1e6);
+  const hasBalance = balance >= amountWei;
+  runtime2.log(`Balance: ${formatUnits(balance, 6)} wKESY (need ${request.amount})`);
+  runtime2.log(`Sender blacklisted: ${senderBlacklisted}`);
+  runtime2.log(`Receiver blacklisted: ${receiverBlacklisted}`);
+  runtime2.log(`Has sufficient balance: ${hasBalance}`);
+  runtime2.log(`
+[Step 3] Simulating bridge transaction on Tenderly...`);
+  const bridgeCalldata = encodeFunctionData({
+    abi: BridgeABI,
+    functionName: "bridgeKESY",
+    args: [
+      BigInt(CHAIN_SELECTORS[dst]),
+      `0x${senderAddr}`,
+      amountWei
+    ]
+  });
+  const simResult = runtime2.runInNodeMode((nodeRuntime) => {
+    const httpClient = new cre.capabilities.HTTPClient;
+    const response2 = httpClient.sendRequest(nodeRuntime, {
+      url: config.tenderlyRpcUrl,
+      method: "POST",
+      body: new TextEncoder().encode(JSON.stringify({
+        jsonrpc: "2.0",
+        method: "eth_call",
+        params: [{
+          from: request.senderAddress,
+          to: config.spokeBridgeAddress,
+          data: bridgeCalldata,
+          gas: "0x7A120"
+        }, "latest"],
+        id: 2
+      })),
+      headers: { "Content-Type": "application/json" }
+    }).result();
+    const body = new TextDecoder().decode(response2.body);
+    return body;
+  }, consensusMedianAggregation())().result();
+  runtime2.log(`Simulation result: ${String(simResult).slice(0, 200)}...`);
+  runtime2.log(`
+[Step 4] Sending simulation data to Gemini AI for analysis...`);
+  const analysisPrompt = `You are an AI assistant for the KESY cross-chain bridge system. Analyze this bridge simulation and provide a clear, user-friendly summary.
+
+## Bridge Request
+- Direction: ${request.sourceChain} → ${request.destChain}
+- Amount: ${request.amount} KESY (6 decimals)
+- Sender: ${request.senderAddress}
+- Receiver: ${request.receiverAddress}
+
+## Pre-flight Check Results
+- Sender wKESY Balance: ${formatUnits(balance, 6)} wKESY
+- Has Sufficient Balance: ${hasBalance}
+- Sender Blacklisted (ACE RejectPolicy): ${senderBlacklisted}
+- Receiver Blacklisted (ACE RejectPolicy): ${receiverBlacklisted}
+
+## Bridge Simulation (Tenderly Virtual TestNet)
+Raw result: ${String(simResult).slice(0, 500)}
+
+## System Context
+- This bridge uses Chainlink CCIP for cross-chain messaging
+- wKESY is protected by Chainlink ACE (Automated Compliance Engine)
+- ACE policies: RejectPolicy (address blacklist) + VolumePolicy (min/max transfer caps)
+- The bridge burns wKESY on Sepolia and unlocks native KESY on Hedera via CCIP
+
+## Instructions
+1. Summarize whether the bridge would succeed or fail
+2. If it would fail, explain exactly why (insufficient balance, blacklisted, policy violation, etc.)
+3. Estimate approximate costs (CCIP fee in LINK, gas costs)
+4. Provide a confidence level (high/medium/low) for the simulation accuracy
+5. If there are any compliance concerns, flag them clearly
+6. Keep the response conversational and under 200 words
+7. Use emojis sparingly for visual clarity`;
+  const geminiResponse = runtime2.runInNodeMode((nodeRuntime) => {
+    const httpClient = new cre.capabilities.HTTPClient;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
+    const response2 = httpClient.sendRequest(nodeRuntime, {
+      url: geminiUrl,
+      method: "POST",
+      body: new TextEncoder().encode(JSON.stringify({
+        contents: [{
+          parts: [{ text: analysisPrompt }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 512
+        }
+      })),
+      headers: { "Content-Type": "application/json" }
+    }).result();
+    const body = new TextDecoder().decode(response2.body);
+    return body;
+  }, consensusMedianAggregation())().result();
+  let aiAnalysis = "Unable to parse AI response";
+  try {
+    const geminiData = JSON.parse(String(geminiResponse));
+    if (geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
+      aiAnalysis = geminiData.candidates[0].content.parts[0].text;
     }
-  }).result();
-  runtime2.log("Transaction sent to Sepolia");
-  runtime2.log("Error: " + resp.errorMessage || "No Errors in response");
-  runtime2.log("Hash: " + resp.txHash?.toString() || "No Transaction Hash in response");
-  runtime2.log("Status: " + resp.txStatus.toString() || "No Transaction Status in response");
-  const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
-  if (resp.txStatus !== TxStatus.SUCCESS) {
-    runtime2.log(`⚠️ Transaction failed: ${resp.errorMessage || "unknown error"}`);
-    return `Failed: ${resp.errorMessage}`;
+  } catch {
+    aiAnalysis = `Raw AI response: ${String(geminiResponse).slice(0, 500)}`;
   }
-  runtime2.log(`✅ RejectPolicy updated on Sepolia`);
-  runtime2.log(`   Tx: ${txHash}`);
-  runtime2.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
-  return `Compliance sync complete. Tx: ${txHash}`;
+  runtime2.log(`
+[Step 5] Gemini Analysis:
+${aiAnalysis}`);
+  const response = JSON.stringify({
+    status: "simulated",
+    direction: `${request.sourceChain} → ${request.destChain}`,
+    amount: request.amount,
+    sender: request.senderAddress,
+    receiver: request.receiverAddress,
+    preflight: {
+      balance: formatUnits(balance, 6),
+      hasSufficientBalance: hasBalance,
+      senderBlacklisted,
+      receiverBlacklisted
+    },
+    aiAnalysis,
+    timestamp: Date.now()
+  });
+  return response;
 };
 var initWorkflow = (config) => {
-  const cron = new CronCapability;
+  const httpTrigger = new HTTPCapability;
   return [
-    handler(cron.trigger({ schedule: config.schedule }), onComplianceSyncTrigger)
+    handler(httpTrigger.trigger({
+      authorizedKeys: config.authorizedEVMAddress ? [{
+        type: "KEY_TYPE_ECDSA_EVM",
+        publicKey: config.authorizedEVMAddress
+      }] : []
+    }), onAgenticBridge)
   ];
 };
 async function main() {

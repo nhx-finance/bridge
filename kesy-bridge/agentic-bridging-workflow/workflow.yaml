@@ -1,0 +1,13 @@
+# ==========================================================================
+# CRE WORKFLOW SETTINGS FILE — Agentic Bridging
+# ==========================================================================
+# HTTP-triggered workflow for bridge simulation + AI analysis
+
+# ==========================================================================
+staging-settings:
+  user-workflow:
+    workflow-name: "agentic-bridging-staging"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.staging.json"
+    secrets-path: ""

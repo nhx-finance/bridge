@@ -161,7 +161,7 @@ sequenceDiagram
 | Contract | Address |
 |----------|---------|
 | Hub Bridge | `0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38` |
-| Native KESY | `0x006E4dc3` (Token ID: 0.0.7228099) |
+| Native KESY | `0x00000000000000000000000000000000006e4dc3` (Token ID: 0.0.7228867) |
 
 ### Ethereum Sepolia
 

@@ -191,6 +191,50 @@ cre workflow deploy ./kesy-bridge-workflow --target=staging-settings
 
 ---
 
+## Design Considerations: CRE Forwarder & RejectPolicy Ownership
+
+> [!IMPORTANT]
+> `RejectPolicy.rejectAddress()` is restricted to `onlyOwner`. In CRE's delivery model, the DON-signed report is submitted on-chain by a **CRE Forwarder contract** — not by your deployer EOA. Since the Forwarder is not the RejectPolicy owner, the call would revert on-chain.
+
+### Current State (Hackathon)
+
+This workflow **demonstrates the full end-to-end pipeline**:
+1. ✅ CRE cron polls Hedera Mirror Node for freeze events
+2. ✅ DON nodes reach consensus and sign a report
+3. ✅ `writeReport()` targets the correct chain (Sepolia) and contract (RejectPolicy)
+4. ⚠️ On-chain delivery would revert due to `onlyOwner` — the CRE Forwarder is not the owner
+
+For demo purposes, the deployer EOA can manually call `rejectAddress()` via `cast`:
+
+```bash
+# Manually blacklist an address (deployer is the owner)
+cast send 0x366491aB0a574385B1795E24477D91BF2840c301 \
+  "rejectAddress(address)" <TARGET_ADDRESS> \
+  --rpc-url $ETH_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY
+```
+
+### Production Path
+
+```mermaid
+graph LR
+    DON["DON Nodes"] -->|"signed report"| FWD["CRE Forwarder"]
+    FWD -->|"onReport()"| CC["ComplianceConsumer<br/><i>owns RejectPolicy</i>"]
+    CC -->|"rejectAddress()"| RP["RejectPolicy"]
+
+    style DON fill:#0891B2,color:#fff
+    style FWD fill:#7C3AED,color:#fff
+    style CC fill:#059669,color:#fff
+    style RP fill:#DC2626,color:#fff
+```
+
+In production, a `ComplianceConsumer` contract would:
+1. Be deployed and set as the owner of `RejectPolicy`
+2. Implement `onReport()` to decode the DON-signed payload
+3. Call `rejectPolicy.rejectAddress(addr)` on behalf of the CRE DON
+4. This makes the entire flow trustless — no EOA in the loop
+
+---
+
 ## Deployed Addresses
 
 | Contract | Chain | Address |

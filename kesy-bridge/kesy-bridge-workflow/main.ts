@@ -152,7 +152,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 	// STEP 2: If frozen accounts found, update RejectPolicy
 	// ──────────────────────────────────────────────────────
 
-	if (frozenAccounts === 0) {
+	if (frozenAccounts !== 0) {
 		runtime.log("No frozen accounts to propagate. Done.");
 		return "No updates needed";
 	}
@@ -203,6 +203,10 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 			},
 		})
 		.result();
+		runtime.log("Transaction sent to Sepolia");
+		runtime.log("Error: " + resp.errorMessage || "No Errors in response");
+		runtime.log("Hash: " + resp.txHash?.toString() || "No Transaction Hash in response");
+		runtime.log("Status: " + resp.txStatus.toString() || "No Transaction Status in response");
 
 	const txHash = resp.txHash
 		? bytesToHex(resp.txHash)

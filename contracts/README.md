@@ -15,7 +15,7 @@
 ```mermaid
 graph TD
     subgraph "Hedera — Hub"
-        KESY["🪙 Native KESY<br/><i>HTS Token · 0.0.7228099</i>"]
+        KESY["🪙 Native KESY<br/><i>HTS Token · 0.0.7228867</i>"]
         HUB["🔐 KESYOmniBridge<br/><code>isHub = true</code><br/><i>Lock / Unlock</i>"]
     end
 
@@ -61,7 +61,7 @@ graph TD
 | Contract | Address |
 |----------|---------|
 | **Hub Bridge** | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
-| **Native KESY** | [`0x006E4dc3`](https://hashscan.io/testnet/token/0.0.7228099) |
+| **Native KESY** | [`0x00000000000000000000000000000000006e4dc3`](https://hashscan.io/testnet/token/0.0.7228867) |
 
 ### Ethereum Sepolia
 
