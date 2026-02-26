@@ -3,5 +3,5 @@
   "hederaMirrorUrl": "https://testnet.mirrornode.hedera.com",
   "hederaKesyTokenId": "0.0.7228099",
   "sepoliaChainSelector": "16015286601757825753",
-  "policyManagerAddress": "0x0eb38584703b9d22b757a5772211f78d8bae391d"
+  "rejectPolicyAddress": "0x366491aB0a574385B1795E24477D91BF2840c301"
 }

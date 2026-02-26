@@ -27,29 +27,27 @@ type Config = {
 
 	// Sepolia Spoke
 	sepoliaChainSelector: string;	// "16015286601757825753"
-	policyManagerAddress: string;	// PolicyManager on Sepolia
+	rejectPolicyAddress: string;	// ACE RejectPolicy on Sepolia
 };
 
 // ========================================
-// ABI for PolicyManager.setBlacklisted
+// ABI for ACE RejectPolicy.rejectAddress
 // ========================================
-const PolicyManagerABI = [
+const RejectPolicyABI = [
 	{
 		type: "function",
-		name: "setBlacklisted",
+		name: "rejectAddress",
 		inputs: [
-			{ name: "_account", type: "address" },
-			{ name: "_status", type: "bool" },
+			{ name: "account", type: "address" },
 		],
 		outputs: [],
 		stateMutability: "nonpayable",
 	},
 	{
 		type: "function",
-		name: "batchSetBlacklisted",
+		name: "unrejectAddress",
 		inputs: [
-			{ name: "_accounts", type: "address[]" },
-			{ name: "_status", type: "bool" },
+			{ name: "account", type: "address" },
 		],
 		outputs: [],
 		stateMutability: "nonpayable",
@@ -82,19 +80,19 @@ interface HederaMirrorResponse {
 // ========================================
 // WORKFLOW: Poll Hedera Mirror Node for
 // freeze events and propagate to Sepolia
-// PolicyManager
+// ACE RejectPolicy
 // ========================================
 
 /**
  * Main cron handler: Checks Hedera Mirror Node for recent
  * freeze/unfreeze events on the KESY token and propagates
- * them to the Sepolia PolicyManager.
+ * them to the Sepolia ACE RejectPolicy.
  *
  * Flow:
  *   1. Cron triggers every N seconds
  *   2. Fetch recent freeze transactions from Hedera Mirror Node
  *   3. For each frozen address, build a DON-signed report
- *   4. Deliver report to PolicyManager.setBlacklisted() on Sepolia
+ *   4. Deliver report to RejectPolicy.rejectAddress() on Sepolia
  */
 const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 	const config = runtime.config;
@@ -102,7 +100,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 	runtime.log("=== KESY Compliance Sync Workflow Triggered ===");
 	runtime.log(`Mirror Node: ${config.hederaMirrorUrl}`);
 	runtime.log(`KESY Token: ${config.hederaKesyTokenId}`);
-	runtime.log(`PolicyManager: ${config.policyManagerAddress}`);
+	runtime.log(`RejectPolicy: ${config.rejectPolicyAddress}`);
 
 	// ──────────────────────────────────────────────────────
 	// STEP 1: Fetch recent freeze events from Hedera Mirror Node
@@ -151,7 +149,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 	runtime.log(`Found ${frozenAccounts} potentially frozen accounts`);
 
 	// ──────────────────────────────────────────────────────
-	// STEP 2: If frozen accounts found, update PolicyManager
+	// STEP 2: If frozen accounts found, update RejectPolicy
 	// ──────────────────────────────────────────────────────
 
 	if (frozenAccounts === 0) {
@@ -159,25 +157,25 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 		return "No updates needed";
 	}
 
-	runtime.log("\n[Step 2] Propagating freeze status to Sepolia PolicyManager...");
+	runtime.log("\n[Step 2] Propagating freeze status to Sepolia ACE RejectPolicy...");
 
-	// For demo purposes, we encode a sample setBlacklisted call
+	// For demo purposes, we encode a sample rejectAddress call
 	// In production, this would iterate over each frozen EVM address
-	// and call setBlacklisted(address, true) for each one
+	// and call rejectAddress(address) for each one
 	//
 	// Note: Hedera account IDs (0.0.xxxx) need to be mapped to their
 	// EVM alias addresses. This mapping comes from the Mirror Node API:
 	// GET /api/v1/accounts/{accountId} → evm_address field
 
-	// Example: Encode a setBlacklisted call for a demo frozen address
+	// Example: Encode a rejectAddress call for a demo frozen address
 	const demoFrozenAddress = getAddress("0x0000000000000000000000000000000000000000");
 	const calldata = encodeFunctionData({
-		abi: PolicyManagerABI,
-		functionName: "setBlacklisted",
-		args: [demoFrozenAddress, true],
+		abi: RejectPolicyABI,
+		functionName: "rejectAddress",
+		args: [demoFrozenAddress],
 	});
 
-	runtime.log(`Encoded setBlacklisted calldata: ${calldata.slice(0, 20)}...`);
+	runtime.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
 
 	// Generate DON-signed report containing the calldata
 	const reportResponse = runtime
@@ -191,14 +189,14 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 
 	runtime.log("DON-signed report generated");
 
-	// Deliver to PolicyManager on Sepolia via CRE Forwarder
+	// Deliver to RejectPolicy on Sepolia via CRE Forwarder
 	const evmClient = new cre.capabilities.EVMClient(
 		BigInt(config.sepoliaChainSelector),
 	);
 
 	const resp = evmClient
 		.writeReport(runtime, {
-			receiver: config.policyManagerAddress,
+			receiver: config.rejectPolicyAddress,
 			report: reportResponse,
 			gasConfig: {
 				gasLimit: "200000",
@@ -215,7 +213,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 		return `Failed: ${resp.errorMessage}`;
 	}
 
-	runtime.log(`✅ PolicyManager updated on Sepolia`);
+	runtime.log(`✅ RejectPolicy updated on Sepolia`);
 	runtime.log(`   Tx: ${txHash}`);
 	runtime.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
 

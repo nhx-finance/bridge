@@ -2,12 +2,13 @@
 pragma solidity 0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {CCIPLocalSimulator, IRouterClient} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
 import {BurnMintERC677Helper} from "@chainlink/local/src/ccip/CCIPLocalSimulator.sol";
 import {LinkToken} from "@chainlink/local/src/shared/LinkToken.sol";
 import {KESYOmniBridge} from "../src/KESYOmniBridge.sol";
 import {wKESY} from "../src/wKESY.sol";
-import {PolicyManager} from "../src/PolicyManager.sol";
+import {PolicyEngine} from "@chainlink/policy-management/core/PolicyEngine.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -53,9 +54,16 @@ contract E2ETest is Test {
         chainSelector = _chainSelector;
         linkToken = IERC20(address(linkToken_));
 
+        // Deploy PolicyEngine via proxy (defaultAllow=true)
+        PolicyEngine engineImpl = new PolicyEngine();
+        ERC1967Proxy engineProxy = new ERC1967Proxy(
+            address(engineImpl),
+            abi.encodeWithSelector(PolicyEngine.initialize.selector, true, address(this))
+        );
+
         // Deploy Tokens
         nativeKesy = new MockKESY();
-        wrappedKesy = new wKESY(address(new PolicyManager()));
+        wrappedKesy = new wKESY(address(engineProxy));
 
         // Deploy Bridges
         // Notice we pass the same router for both since LocalSimulator mocks a single environment

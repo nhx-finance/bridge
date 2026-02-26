@@ -1,123 +1,143 @@
-# KESY Bridge — Decentralized OmniBridge Guide
+# KESY OmniBridge — Contracts
 
 <div align="center">
 
-**Bi-Directional Bridging: Hedera Testnet ↔ Ethereum Sepolia**
+**Cross-Chain KESY Token Bridge · Chainlink CCIP + ACE**
 
-*Powered by Chainlink CCIP & KESY Global Hub*
+*Hub-and-Spoke Architecture with Automated Compliance Enforcement*
 
 </div>
 
 ---
 
-## Architecture Overview
+## Architecture
 
-The KESY OmniBridge enables seamless, secure, and bidirectional token transfers between Hedera and EVM-compatible chains. It implements a **Hub-and-Spoke** model to overcome Hedera's current lack of native CCIP Token Pools.
+```mermaid
+graph TD
+    subgraph "Hedera — Hub"
+        KESY["🪙 Native KESY<br/><i>HTS Token · 0.0.7228099</i>"]
+        HUB["🔐 KESYOmniBridge<br/><code>isHub = true</code><br/><i>Lock / Unlock</i>"]
+    end
 
-### Bridging Flow (Bi-Directional)
+    subgraph "Chainlink Infrastructure"
+        CCIP["🌐 CCIP Router<br/><i>Arbitrary Messaging</i>"]
+        CRE["⚙️ CRE Workflow<br/><i>Compliance Sync (5 min)</i>"]
+    end
+
+    subgraph "Ethereum Sepolia — Spoke"
+        PE["🔧 PolicyEngine<br/><i>ACE Registry + Coordinator</i>"]
+        RP["🛡️ RejectPolicy<br/><i>Address Blacklist</i>"]
+        VP["📊 VolumePolicy<br/><i>Min/Max Caps</i>"]
+        EX["🔍 KESYExtractor<br/><i>Parameter Extraction</i>"]
+        WKESY["🪙 wKESY<br/><i>PolicyProtected ERC-20</i>"]
+        SPOKE["🔐 KESYOmniBridge<br/><code>isHub = false</code><br/><i>Burn / Mint</i>"]
+    end
+
+    KESY <-->|"Lock / Unlock"| HUB
+    HUB <-->|"ccipSend / ccipReceive"| CCIP
+    CCIP <-->|"ccipSend / ccipReceive"| SPOKE
+    SPOKE -->|"mint / burnFrom"| WKESY
+    WKESY -->|"runPolicy()"| PE
+    PE -->|"extract()"| EX
+    PE -->|"check account"| RP
+    PE -->|"check amount"| VP
+    CRE -.->|"rejectAddress()"| RP
+
+    style HUB fill:#4F46E5,color:#fff
+    style SPOKE fill:#059669,color:#fff
+    style WKESY fill:#D97706,color:#fff
+    style PE fill:#BE185D,color:#fff
+    style RP fill:#DC2626,color:#fff
+    style VP fill:#7C3AED,color:#fff
+    style CRE fill:#0891B2,color:#fff
+```
+
+---
+
+## Deployed Addresses (Testnet)
+
+### Hedera Testnet
+
+| Contract | Address |
+|----------|---------|
+| **Hub Bridge** | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
+| **Native KESY** | [`0x006E4dc3`](https://hashscan.io/testnet/token/0.0.7228099) |
+
+### Ethereum Sepolia
+
+| Contract | Address |
+|----------|---------|
+| **PolicyEngine** (proxy) | [`0x990D65f053c8Fa6Dfe43cF293534474B94F906a3`](https://sepolia.etherscan.io/address/0x990D65f053c8Fa6Dfe43cF293534474B94F906a3) |
+| **RejectPolicy** (proxy) | [`0x366491aB0a574385B1795E24477D91BF2840c301`](https://sepolia.etherscan.io/address/0x366491aB0a574385B1795E24477D91BF2840c301) |
+| **VolumePolicy** (proxy) | [`0xA2899CAa08977408792aE767799d2144B5112469`](https://sepolia.etherscan.io/address/0xA2899CAa08977408792aE767799d2144B5112469) |
+| **KESYExtractor** | [`0xaBCEf98127Da5DB87b41593E47a5d1a492bAA82b`](https://sepolia.etherscan.io/address/0xaBCEf98127Da5DB87b41593E47a5d1a492bAA82b) |
+| **wKESY** | [`0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1`](https://sepolia.etherscan.io/address/0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1) |
+| **Spoke Bridge** | [`0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48`](https://sepolia.etherscan.io/address/0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48) |
+
+---
+
+## Contract Summary
+
+| Contract | Purpose |
+|----------|---------|
+| `KESYOmniBridge.sol` | CCIP bridge — locks/unlocks on Hub, burns/mints on Spoke |
+| `wKESY.sol` | ACE-protected ERC-20, inherits `PolicyProtected` |
+| `KESYExtractor.sol` | ACE parameter extractor for all wKESY selectors |
+| `PolicyManager.sol` | *(removed — replaced by real ACE PolicyEngine)* |
+
+---
+
+## How ACE Enforcement Works
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Hub as Hedera Hub (KESYOmniBridge)
-    participant CCIP as Chainlink CCIP Network
-    participant Spoke as Sepolia Spoke (KESYOmniBridge)
-    participant wKESY as wKESY (Sepolia)
+    participant wKESY
+    participant PolicyEngine
+    participant KESYExtractor
+    participant RejectPolicy
+    participant VolumePolicy
 
-    Note over User, wKESY: Direction: Hedera -> Sepolia
-    User->>Hub: 1. approve(KESY)
-    User->>Hub: 2. bridgeKESY(Sepolia)
-    Hub->>Hub: 3. Lock native KESY
-    Hub->>CCIP: 4. ccipSend (Mint Order)
-    CCIP->>Spoke: 5. ccipReceive
-    Spoke->>wKESY: 6. mint(user, amount)
-
-    Note over User, wKESY: Direction: Sepolia -> Hedera
-    User->>wKESY: 7. approve(wKESY)
-    User->>Spoke: 8. bridgeKESY(Hedera)
-    Spoke->>wKESY: 9. burnFrom(user, amount)
-    Spoke->>CCIP: 10. ccipSend (Unlock Order)
-    CCIP->>Hub: 11. ccipReceive
-    Hub->>Hub: 12. Unlock native KESY to User
+    User->>wKESY: transfer(bob, 100)
+    Note over wKESY: runPolicy() modifier fires
+    wKESY->>PolicyEngine: run(selector=transfer, data)
+    PolicyEngine->>KESYExtractor: extract(payload)
+    KESYExtractor-->>PolicyEngine: {account: bob, amount: 100}
+    PolicyEngine->>RejectPolicy: run(account=bob)
+    RejectPolicy-->>PolicyEngine: CONTINUE ✓
+    PolicyEngine->>VolumePolicy: run(amount=100)
+    VolumePolicy-->>PolicyEngine: CONTINUE ✓
+    PolicyEngine-->>wKESY: All policies passed
+    wKESY->>wKESY: super.transfer(bob, 100) ✓
 ```
 
-### Logical Infrastructure
+---
 
-```mermaid
-graph TB
-    subgraph "Hedera Testnet (HUB)"
-        KESY["KESY Token<br/><code>Native HTS (0x...4dc3)</code>"]
-        LINK_H["LINK Token"]
-        Hub["KESYOmniBridge<br/><code>isHub = true</code>"]
-        HR["Hedera Router"]
-    end
+## Quick Start
 
-    subgraph "CCIP Network"
-        DON["Decentralized Oracle Network"]
-    end
+```bash
+# Install dependencies
+forge install
 
-    subgraph "Ethereum Sepolia (SPOKE)"
-        SR["Sepolia Router"]
-        Spoke["KESYOmniBridge<br/><code>isHub = false</code>"]
-        WKESY["wKESY Token<br/><code>BurnMintERC20</code>"]
-    end
+# Build
+forge build
 
-    KESY <-->|"Vault Lock/Unlock"| Hub
-    LINK_H -->|"Fee Payment"| Hub
-    Hub <-->|"ccipSend"| HR
-    HR <--> DON
-    DON <--> SR
-    SR <-->|"ccipReceive"| Spoke
-    Spoke <-->|"Burn/Mint"| WKESY
+# Test (all 20 pass)
+forge test -vv
 
-    style Hub fill:#4F46E5,color:#fff
-    style Spoke fill:#059669,color:#fff
-    style WKESY fill:#D97706,color:#fff
-    style KESY fill:#7C3AED,color:#fff
-    style DON fill:#DC2626,color:#fff
+# Deploy to Sepolia
+source .env && forge script script/DeploySepolia.s.sol --rpc-url $ETH_SEPOLIA_RPC_URL --broadcast
 ```
-
-## Contract & Network Reference
-
-### Hedera Testnet (Hub)
-
-| Item | Address / Value |
-|------|----------------|
-| **Hub Bridge** | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
-| **Native KESY** | [`0x00000000000000000000000000000000006E4dc3`](https://hashscan.io/testnet/token/0.0.7228099) |
-| **CCIP Router** | `0x802C5F84eAD128Ff36fD6a3f8a418e339f467Ce4` |
-| **LINK Token** | `0x90a386d59b9A6a4795a011e8f032Fc21ED6FEFb6` |
-| **Chain Selector** | `222782988166878823` |
-
-### Ethereum Sepolia (Spoke)
-
-| Item | Address / Value |
-|------|----------------|
-| **Spoke Bridge** | [`0x5109Cd5e68e3182efeF8615C692989119aF76959`](https://sepolia.etherscan.io/address/0x5109Cd5e68e3182efeF8615C692989119aF76959) |
-| **wKESY Token** | [`0x8Cff9519bb09f61B3A78e12572d569F071fd283A`](https://sepolia.etherscan.io/address/0x8Cff9519bb09f61B3A78e12572d569F071fd283A) |
-| **CCIP Router** | `0x0BF3dE8c5D3e8A2B34D2BEeB17ABfCeBaf363A59` |
-| **LINK Token** | `0x779877A7B0D9E8603169DdbD7836e478b4624789` |
-| **Chain Selector** | `16015286601757825753` |
 
 ---
 
 ## Security Model
 
-1. **Router Protection:** The `onlyRouter` modifier ensures that only official Chainlink delivery mechanisms can trigger the `ccipReceive` logic.
-2. **Dual-Layer Allowlisting:**
-   - **Chain-Level:** Rejects messages from unauthorized chain selectors.
-   - **Contract-Level:** Rejects messages from unauthorized sender addresses to prevent impersonation.
-3. **Immutability of Logic:** The roles are fixed; a Hub cannot burn tokens, and a Spoke cannot unlock tokens it doesn't hold.
-4. **Dynamic Fee Calculation:** All transactions query `getFee()` in real-time to prevent underpayment or hardcoded gas failures.
-
-## Testing & Operations
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions and [ARCHITECTURE.md](./ARCHITECTURE.md) for deep technical implementation details.
-
----
-
-<div align="center">
-
-**Built with ❤️ by the KESY Team using Chainlink CCIP**
-
-</div>
+| Layer | Mechanism |
+|-------|-----------|
+| **Transport** | CCIP Router-gated (`onlyRouter`) |
+| **Chain Auth** | Chain selector + sender address allowlisting |
+| **Compliance** | Chainlink ACE `PolicyEngine` + `RejectPolicy` + `VolumePolicy` |
+| **Automation** | CRE Workflow syncs Hedera freeze state to `RejectPolicy` |
+| **Token Access** | `MINTER_ROLE` / `BURNER_ROLE` restricted to bridge only |
+| **Upgradeable** | ACE policies deployed behind ERC1967 proxies |

@@ -2,12 +2,22 @@
 pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {wKESY} from "../src/wKESY.sol";
-import {PolicyManager} from "../src/PolicyManager.sol";
+import {KESYExtractor} from "../src/KESYExtractor.sol";
+import {PolicyEngine} from "@chainlink/policy-management/core/PolicyEngine.sol";
+import {RejectPolicy} from "@chainlink/policy-management/policies/RejectPolicy.sol";
+import {VolumePolicy} from "@chainlink/policy-management/policies/VolumePolicy.sol";
+import {Policy} from "@chainlink/policy-management/core/Policy.sol";
+import {IPolicyEngine} from "@chainlink/policy-management/interfaces/IPolicyEngine.sol";
 
 contract wKESYTest is Test {
     wKESY public token;
-    PolicyManager public policyManager;
+    PolicyEngine public policyEngine;
+    RejectPolicy public rejectPolicy;
+    VolumePolicy public volumePolicy;
+    KESYExtractor public extractor;
+
     address public admin;
     address public minter;
     address public user;
@@ -17,9 +27,72 @@ contract wKESYTest is Test {
         minter = makeAddr("minter");
         user = makeAddr("user");
 
-        policyManager = new PolicyManager();
-        token = new wKESY(address(policyManager));
+        // 1. Deploy PolicyEngine via proxy
+        PolicyEngine engineImpl = new PolicyEngine();
+        ERC1967Proxy engineProxy = new ERC1967Proxy(
+            address(engineImpl),
+            abi.encodeWithSelector(PolicyEngine.initialize.selector, true, admin)
+        );
+        policyEngine = PolicyEngine(address(engineProxy));
+
+        // 2. Deploy wKESY (attaches to PolicyEngine in constructor)
+        token = new wKESY(address(policyEngine));
         token.grantRole(token.MINTER_ROLE(), minter);
+
+        // 3. Deploy KESYExtractor
+        extractor = new KESYExtractor();
+
+        // 4. Set extractor for all 4 wKESY selectors
+        bytes4 transferSel = bytes4(keccak256("transfer(address,uint256)"));
+        bytes4 transferFromSel = bytes4(keccak256("transferFrom(address,address,uint256)"));
+        bytes4 mintSel = bytes4(keccak256("mint(address,uint256)"));
+        bytes4 burnFromSel = bytes4(keccak256("burnFrom(address,uint256)"));
+
+        policyEngine.setExtractor(transferSel, address(extractor));
+        policyEngine.setExtractor(transferFromSel, address(extractor));
+        policyEngine.setExtractor(mintSel, address(extractor));
+        policyEngine.setExtractor(burnFromSel, address(extractor));
+
+        // 5. Deploy RejectPolicy (blacklist) via proxy
+        RejectPolicy rejectImpl = new RejectPolicy();
+        ERC1967Proxy rejectProxy = new ERC1967Proxy(
+            address(rejectImpl),
+            abi.encodeWithSelector(
+                Policy.initialize.selector,
+                address(policyEngine),
+                admin,
+                ""
+            )
+        );
+        rejectPolicy = RejectPolicy(address(rejectProxy));
+
+        // 6. Attach RejectPolicy to wKESY for all selectors
+        bytes32[] memory accountParam = new bytes32[](1);
+        accountParam[0] = extractor.PARAM_ACCOUNT();
+
+        policyEngine.addPolicy(address(token), transferSel, address(rejectPolicy), accountParam);
+        policyEngine.addPolicy(address(token), transferFromSel, address(rejectPolicy), accountParam);
+        policyEngine.addPolicy(address(token), mintSel, address(rejectPolicy), accountParam);
+        policyEngine.addPolicy(address(token), burnFromSel, address(rejectPolicy), accountParam);
+
+        // 7. Deploy VolumePolicy via proxy (unconfigured — no limits by default)
+        VolumePolicy volumeImpl = new VolumePolicy();
+        ERC1967Proxy volumeProxy = new ERC1967Proxy(
+            address(volumeImpl),
+            abi.encodeWithSelector(
+                Policy.initialize.selector,
+                address(policyEngine),
+                admin,
+                abi.encode(uint256(0), uint256(0)) // no min/max by default
+            )
+        );
+        volumePolicy = VolumePolicy(address(volumeProxy));
+
+        // 8. Attach VolumePolicy to wKESY transfer selector
+        bytes32[] memory amountParam = new bytes32[](1);
+        amountParam[0] = extractor.PARAM_AMOUNT();
+
+        policyEngine.addPolicy(address(token), transferSel, address(volumePolicy), amountParam);
     }
 
     // ─── Mint ───────────────────────────────────────────────
@@ -27,7 +100,6 @@ contract wKESYTest is Test {
     function test_mint_withMinterRole() public {
         vm.prank(minter);
         token.mint(user, 1000e6);
-
         assertEq(token.balanceOf(user), 1000e6);
     }
 
@@ -39,10 +111,8 @@ contract wKESYTest is Test {
 
     function testFuzz_mint_arbitraryAmount(uint256 amount) public {
         amount = bound(amount, 1, type(uint128).max);
-
         vm.prank(minter);
         token.mint(user, amount);
-
         assertEq(token.balanceOf(user), amount);
     }
 
@@ -80,8 +150,6 @@ contract wKESYTest is Test {
 
     function test_grantMinterRole_onlyAdmin() public {
         address newMinter = makeAddr("newMinter");
-
-        // Admin can grant
         token.grantRole(token.MINTER_ROLE(), newMinter);
         assertTrue(token.hasRole(token.MINTER_ROLE(), newMinter));
     }
@@ -105,45 +173,34 @@ contract wKESYTest is Test {
         assertEq(token.symbol(), "wKESY");
     }
 
-    // ─── PolicyManager / ACE Integration ─────────────────────
+    // ─── ACE: RejectPolicy (Blacklist) ──────────────────────
 
-    function test_mint_revertsIfRecipientBlacklisted() public {
-        policyManager.setBlacklisted(user, true);
+    function test_mint_revertsIfRecipientRejected() public {
+        rejectPolicy.rejectAddress(user);
 
         vm.prank(minter);
-        vm.expectRevert(abi.encodeWithSelector(wKESY.NonCompliantOperation.selector, address(0), user, 100e6));
+        vm.expectRevert();
         token.mint(user, 100e6);
     }
 
-    function test_transfer_revertsIfSenderBlacklisted() public {
+    function test_transfer_revertsIfRecipientRejected() public {
         vm.prank(minter);
         token.mint(user, 500e6);
 
-        policyManager.setBlacklisted(user, true);
+        rejectPolicy.rejectAddress(minter);
 
         vm.prank(user);
-        vm.expectRevert(abi.encodeWithSelector(wKESY.NonCompliantOperation.selector, user, minter, 100e6));
+        vm.expectRevert();
         token.transfer(minter, 100e6);
     }
 
-    function test_transfer_revertsIfRecipientBlacklisted() public {
+    function test_transfer_succeedsAfterUnrejecting() public {
         vm.prank(minter);
         token.mint(user, 500e6);
 
-        policyManager.setBlacklisted(minter, true);
-
-        vm.prank(user);
-        vm.expectRevert(abi.encodeWithSelector(wKESY.NonCompliantOperation.selector, user, minter, 100e6));
-        token.transfer(minter, 100e6);
-    }
-
-    function test_transfer_succeedsAfterRemovingFromBlacklist() public {
-        vm.prank(minter);
-        token.mint(user, 500e6);
-
-        // Blacklist then un-blacklist
-        policyManager.setBlacklisted(user, true);
-        policyManager.setBlacklisted(user, false);
+        // Reject then unreject
+        rejectPolicy.rejectAddress(user);
+        rejectPolicy.unrejectAddress(user);
 
         vm.prank(user);
         token.transfer(minter, 100e6);
@@ -151,21 +208,43 @@ contract wKESYTest is Test {
         assertEq(token.balanceOf(minter), 100e6);
     }
 
-    function test_batchBlacklist() public {
-        address alice = makeAddr("alice");
-        address bob = makeAddr("bob");
+    // ─── ACE: VolumePolicy (Volume Limits) ──────────────────
 
-        address[] memory accounts = new address[](2);
-        accounts[0] = alice;
-        accounts[1] = bob;
-
-        policyManager.batchSetBlacklisted(accounts, true);
-
-        assertTrue(policyManager.blacklisted(alice));
-        assertTrue(policyManager.blacklisted(bob));
-
+    function test_transfer_blockedByMaxVolume() public {
         vm.prank(minter);
+        token.mint(user, 1000e6);
+
+        // Set max at 500 KESY
+        volumePolicy.setMax(500e6);
+
+        vm.prank(user);
         vm.expectRevert();
-        token.mint(alice, 100e6);
+        token.transfer(minter, 501e6);
+    }
+
+    function test_transfer_blockedByMinVolume() public {
+        vm.prank(minter);
+        token.mint(user, 1000e6);
+
+        // Set min at 10 KESY (need max > min)
+        volumePolicy.setMax(1000e6);
+        volumePolicy.setMin(10e6);
+
+        vm.prank(user);
+        vm.expectRevert();
+        token.transfer(minter, 5e6);
+    }
+
+    function test_transfer_allowedWithinVolumeLimits() public {
+        vm.prank(minter);
+        token.mint(user, 1000e6);
+
+        volumePolicy.setMax(500e6);
+        volumePolicy.setMin(1e6);
+
+        vm.prank(user);
+        token.transfer(minter, 100e6); // within [1, 500] — succeeds
+
+        assertEq(token.balanceOf(minter), 100e6);
     }
 }

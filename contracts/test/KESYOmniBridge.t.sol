@@ -2,9 +2,10 @@
 pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {KESYOmniBridge} from "../src/KESYOmniBridge.sol";
 import {wKESY} from "../src/wKESY.sol";
-import {PolicyManager} from "../src/PolicyManager.sol";
+import {PolicyEngine} from "@chainlink/policy-management/core/PolicyEngine.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
 import {IRouterClient} from "@chainlink/contracts-ccip/contracts/interfaces/IRouterClient.sol";
@@ -44,7 +45,15 @@ contract KESYOmniBridgeTest is Test {
         router = new MockRouter();
         link = new MockToken();
         nativeKesy = new MockToken();
-        wrappedKesy = new wKESY(address(new PolicyManager()));
+
+        // Deploy PolicyEngine via proxy (defaultAllow=true)
+        PolicyEngine engineImpl = new PolicyEngine();
+        ERC1967Proxy engineProxy = new ERC1967Proxy(
+            address(engineImpl),
+            abi.encodeWithSelector(PolicyEngine.initialize.selector, true, admin)
+        );
+
+        wrappedKesy = new wKESY(address(engineProxy));
 
         // Deploy Hub (Hedera)
         hubBridge = new KESYOmniBridge(address(router), address(link), address(nativeKesy), true);
