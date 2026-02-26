@@ -1,53 +1,66 @@
-# Typescript Simple Workflow Example
+# KESY Compliance Sync Workflow
 
-This template provides a simple Typescript workflow example. It shows how to create a simple "Hello World" workflow using Typescript.
+A **Chainlink CRE (Chainlink Runtime Environment)** workflow that monitors the Hedera network for KESY token freeze events and propagates compliance state to the `PolicyManager` on EVM spoke chains (e.g., Sepolia).
 
-Steps to run the example
-
-## 1. Update .env file
-
-You need to add a private key to env file. This is specifically required if you want to simulate chain writes. For that to work the key should be valid and funded.
-If your workflow does not do any chain write then you can just put any dummy key as a private key. e.g.
+## Architecture
 
 ```
-CRE_ETH_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001
+┌─────────────────────────┐     ┌───────────────────┐     ┌─────────────────────┐
+│   Hedera Mirror Node    │     │  CRE DON Network  │     │  Sepolia            │
+│                         │     │                   │     │                     │
+│  Freeze events for      │────▶│  Cron trigger      │────▶│  PolicyManager      │
+│  KESY token (0.0.7228099)│     │  HTTP fetch        │     │  .setBlacklisted()  │
+│                         │     │  DON-signed report │     │                     │
+│                         │     │  writeReport()     │     │  wKESY._update()    │
+│                         │     │                   │     │  checks compliance  │
+└─────────────────────────┘     └───────────────────┘     └─────────────────────┘
 ```
 
-Note: Make sure your `workflow.yaml` file is pointing to the config.json, example:
+## How It Works
 
-```yaml
-staging-settings:
-  user-workflow:
-    workflow-name: "hello-world"
-  workflow-artifacts:
-    workflow-path: "./main.ts"
-    config-path: "./config.json"
-```
+1. **Cron Trigger**: The workflow runs on a schedule (default: every 5 minutes)
+2. **Mirror Node Polling**: Fetches recent freeze/unfreeze events for the KESY token from the Hedera Mirror Node API
+3. **Report Generation**: Encodes a `setBlacklisted(address, bool)` call and signs it via DON consensus
+4. **Chain Write**: Delivers the signed report to the `PolicyManager` contract on Sepolia via the CRE Forwarder
 
-## 2. Install dependencies
+## Setup
 
-If `bun` is not already installed, see https://bun.com/docs/installation for installing in your environment.
-
+### Install dependencies
 ```bash
-cd <workflow-name> && bun install
+cd kesy-bridge-workflow && bun install
 ```
 
-Example: For a workflow directory named `hello-world` the command would be:
+### Configure `.env`
+```env
+CRE_ETH_PRIVATE_KEY=<your-funded-sepolia-private-key>
+CRE_TARGET=staging-settings
+```
 
+### Simulate locally
 ```bash
-cd hello-world && bun install
+cre workflow simulate ./kesy-bridge-workflow --target=staging-settings
 ```
 
-## 3. Simulate the workflow
-
-Run the command from <b>project root directory</b>
-
+### Deploy to CRE
 ```bash
-cre workflow simulate <path-to-workflow-directory> --target=staging-settings
+cre workflow deploy ./kesy-bridge-workflow --target=staging-settings
 ```
 
-Example: For workflow named `hello-world` the command would be:
+## Config Reference
 
-```bash
-cre workflow simulate ./hello-world --target=staging-settings
-```
+| Field | Description |
+|-------|-------------|
+| `schedule` | Cron schedule (e.g., `*/300 * * * * *` = every 5 min) |
+| `hederaMirrorUrl` | Hedera Mirror Node base URL |
+| `hederaKesyTokenId` | KESY token ID on Hedera (e.g., `0.0.7228099`) |
+| `sepoliaChainSelector` | CCIP chain selector for Sepolia |
+| `policyManagerAddress` | PolicyManager contract address on Sepolia |
+
+## Deployed Addresses
+
+| Contract | Chain | Address |
+|----------|-------|---------|
+| PolicyManager | Sepolia | `0x0eb38584703b9d22b757a5772211f78d8bae391d` |
+| wKESY | Sepolia | `0xeE60AaAc2b6173f3Ff42ad3F1ff615d09100C4A7` |
+| Spoke Bridge | Sepolia | `0xbE6E85a565eE95Bb6bdFb8f98D5677f84e8686eE` |
+| Hub Bridge | Hedera Testnet | `0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38` |

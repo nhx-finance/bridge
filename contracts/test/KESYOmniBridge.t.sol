@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {KESYOmniBridge} from "../src/KESYOmniBridge.sol";
 import {wKESY} from "../src/wKESY.sol";
+import {PolicyManager} from "../src/PolicyManager.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Client} from "@chainlink/contracts-ccip/contracts/libraries/Client.sol";
 import {IRouterClient} from "@chainlink/contracts-ccip/contracts/interfaces/IRouterClient.sol";
@@ -43,7 +44,7 @@ contract KESYOmniBridgeTest is Test {
         router = new MockRouter();
         link = new MockToken();
         nativeKesy = new MockToken();
-        wrappedKesy = new wKESY();
+        wrappedKesy = new wKESY(address(new PolicyManager()));
 
         // Deploy Hub (Hedera)
         hubBridge = new KESYOmniBridge(address(router), address(link), address(nativeKesy), true);

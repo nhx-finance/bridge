@@ -7,6 +7,7 @@ import {BurnMintERC677Helper} from "@chainlink/local/src/ccip/CCIPLocalSimulator
 import {LinkToken} from "@chainlink/local/src/shared/LinkToken.sol";
 import {KESYOmniBridge} from "../src/KESYOmniBridge.sol";
 import {wKESY} from "../src/wKESY.sol";
+import {PolicyManager} from "../src/PolicyManager.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -54,7 +55,7 @@ contract E2ETest is Test {
 
         // Deploy Tokens
         nativeKesy = new MockKESY();
-        wrappedKesy = new wKESY();
+        wrappedKesy = new wKESY(address(new PolicyManager()));
 
         // Deploy Bridges
         // Notice we pass the same router for both since LocalSimulator mocks a single environment
