@@ -1,7 +1,7 @@
 {
   "schedule": "*/300 * * * * *",
   "hederaMirrorUrl": "https://testnet.mirrornode.hedera.com",
-  "hederaKesyTokenId": "0.0.7228099",
+  "hederaKesyTokenId": "0.0.7228867",
   "sepoliaChainSelector": "16015286601757825753",
   "rejectPolicyAddress": "0x366491aB0a574385B1795E24477D91BF2840c301"
 }
