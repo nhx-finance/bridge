@@ -15660,96 +15660,110 @@ var sendErrorResponse = (error) => {
 };
 init_encodeFunctionData();
 init_getAddress();
+var SDK_API_KEY = "SDK_API_KEY";
 var RejectPolicyABI = [
   {
     type: "function",
     name: "rejectAddress",
-    inputs: [
-      { name: "account", type: "address" }
-    ],
+    inputs: [{ name: "account", type: "address" }],
     outputs: [],
     stateMutability: "nonpayable"
   },
   {
     type: "function",
     name: "unrejectAddress",
-    inputs: [
-      { name: "account", type: "address" }
-    ],
+    inputs: [{ name: "account", type: "address" }],
     outputs: [],
     stateMutability: "nonpayable"
   }
 ];
 var onComplianceSyncTrigger = (runtime2) => {
   const config = runtime2.config;
+  const secret = runtime2.getSecret({ id: SDK_API_KEY }).result().value;
+  let frozenOrWipedAccounts = [];
+  let calldatas = [];
   runtime2.log("=== KESY Compliance Sync Workflow Triggered ===");
-  runtime2.log(`Mirror Node: ${config.hederaMirrorUrl}`);
+  runtime2.log(`SDK Server: ${config.sdkServerUrl}`);
   runtime2.log(`KESY Token: ${config.hederaKesyTokenId}`);
   runtime2.log(`RejectPolicy: ${config.rejectPolicyAddress}`);
   runtime2.log(`
-[Step 1] Fetching freeze events from Hedera Mirror Node...`);
+[Step 1] Fetching recently frozen accounts from our SDK Server...`);
   const frozenAccounts = runtime2.runInNodeMode((nodeRuntime) => {
     const httpClient = new cre.capabilities.HTTPClient;
-    const url = `${config.hederaMirrorUrl}/api/v1/tokens/${config.hederaKesyTokenId}/balances?account.balance=0&limit=10`;
+    const url = config.sdkServerUrl;
     runtime2.log(`Fetching: ${url}`);
     const response = httpClient.sendRequest(nodeRuntime, {
       url,
-      method: "GET"
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`
+      }
     }).result();
     const body = new TextDecoder().decode(response.body);
     const data = JSON.parse(body);
-    const accounts = [];
-    if (data.balances) {
-      for (const entry of data.balances) {
-        if (entry.balance === 0 && entry.account) {
-          accounts.push(entry.account);
-        }
-      }
+    if (data.recentFrozenOrWipedAccounts.length === 0) {
+      runtime2.log("No frozen accounts found in SDK Server response");
+      return 0;
     }
-    return accounts.length;
+    runtime2.log(`Received ${data.recentFrozenOrWipedAccounts.length} frozen accounts from SDK Server`);
+    frozenOrWipedAccounts = data.recentFrozenOrWipedAccounts;
+    return data.recentFrozenOrWipedAccounts.length;
   }, consensusMedianAggregation())().result();
   runtime2.log(`Found ${frozenAccounts} potentially frozen accounts`);
-  if (frozenAccounts !== 0) {
+  if (frozenAccounts === 0) {
     runtime2.log("No frozen accounts to propagate. Done.");
     return "No updates needed";
   }
   runtime2.log(`
 [Step 2] Propagating freeze status to Sepolia ACE RejectPolicy...`);
-  const demoFrozenAddress = getAddress("0x0000000000000000000000000000000000000000");
-  const calldata = encodeFunctionData({
-    abi: RejectPolicyABI,
-    functionName: "rejectAddress",
-    args: [demoFrozenAddress]
-  });
-  runtime2.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
-  const reportResponse = runtime2.report({
-    encodedPayload: hexToBase64(calldata),
-    encoderName: "evm",
-    signingAlgo: "ecdsa",
-    hashingAlgo: "keccak256"
-  }).result();
-  runtime2.log("DON-signed report generated");
-  const evmClient = new cre.capabilities.EVMClient(BigInt(config.sepoliaChainSelector));
-  const resp = evmClient.writeReport(runtime2, {
-    receiver: config.rejectPolicyAddress,
-    report: reportResponse,
-    gasConfig: {
-      gasLimit: "200000"
+  frozenOrWipedAccounts.forEach((account, index) => {
+    runtime2.log(`Account ${index + 1}: ${account.evmAddress} | Status: ${account.status} | Frozen Date: ${account.frozenDate}`);
+    const evmAddress = `${account.evmAddress}`;
+    runtime2.log(`Validating EVM address: ${evmAddress}`);
+    try {
+      const checksummedAddress = getAddress(evmAddress);
+      runtime2.log(`Checksummed address: ${checksummedAddress}`);
+    } catch (error) {
+      runtime2.log(`Invalid EVM address: ${evmAddress}. Skipping...`);
+      return;
     }
-  }).result();
-  runtime2.log("Transaction sent to Sepolia");
-  runtime2.log("Error: " + resp.errorMessage || "No Errors in response");
-  runtime2.log("Hash: " + resp.txHash?.toString() || "No Transaction Hash in response");
-  runtime2.log("Status: " + resp.txStatus.toString() || "No Transaction Status in response");
-  const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
-  if (resp.txStatus !== TxStatus.SUCCESS) {
-    runtime2.log(`⚠️ Transaction failed: ${resp.errorMessage || "unknown error"}`);
-    return `Failed: ${resp.errorMessage}`;
-  }
-  runtime2.log(`✅ RejectPolicy updated on Sepolia`);
-  runtime2.log(`   Tx: ${txHash}`);
-  runtime2.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
-  return `Compliance sync complete. Tx: ${txHash}`;
+    const calldata = encodeFunctionData({
+      abi: RejectPolicyABI,
+      functionName: "rejectAddress",
+      args: [evmAddress]
+    });
+    runtime2.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
+    calldatas.push(calldata);
+    const reportResponse = runtime2.report({
+      encodedPayload: hexToBase64(calldata),
+      encoderName: "evm",
+      signingAlgo: "ecdsa",
+      hashingAlgo: "keccak256"
+    }).result();
+    runtime2.log("DON-signed report generated");
+    const evmClient = new cre.capabilities.EVMClient(BigInt(config.sepoliaChainSelector));
+    const resp = evmClient.writeReport(runtime2, {
+      receiver: config.rejectPolicyAddress,
+      report: reportResponse,
+      gasConfig: {
+        gasLimit: "200000"
+      }
+    }).result();
+    runtime2.log("Transaction sent to Sepolia");
+    runtime2.log("Error: " + resp.errorMessage || "No Errors in response");
+    runtime2.log("Hash: " + resp.txHash?.toString() || "No Transaction Hash in response");
+    runtime2.log("Status: " + resp.txStatus.toString() || "No Transaction Status in response");
+    const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
+    if (resp.txStatus !== TxStatus.SUCCESS) {
+      runtime2.log(`⚠️ Transaction failed: ${resp.errorMessage || "unknown error"}`);
+      return `Failed: ${resp.errorMessage}`;
+    }
+    runtime2.log(`✅ RejectPolicy updated on Sepolia`);
+    runtime2.log(`   Tx: ${txHash}`);
+    runtime2.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
+  });
+  return `Compliance sync complete. Txns: ${calldatas.length}`;
 };
 var initWorkflow = (config) => {
   const cron = new CronCapability;

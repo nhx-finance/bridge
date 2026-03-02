@@ -4,7 +4,7 @@
 
 **Chainlink CRE · Automated Cross-Chain Compliance**
 
-*Hedera Mirror Node → CRE DON → ACE RejectPolicy on Sepolia*
+_Stablecoin SDK Server → CRE DON → ACE RejectPolicy on Sepolia_
 
 </div>
 
@@ -14,7 +14,7 @@
 
 This workflow is the **automated compliance bridge** between Hedera's native freeze/unfreeze capabilities (HTS) and the on-chain ACE `RejectPolicy` that guards every `wKESY` token operation on Sepolia via Chainlink's Automated Compliance Engine.
 
-Without this workflow, a Hedera admin would need to manually freeze on Hedera *and* separately submit a transaction on every EVM chain. With CRE, this is fully automated.
+Without this workflow, a Hedera admin would need to manually freeze on Hedera _and_ separately submit a transaction on every EVM chain. With CRE, this is fully automated.
 
 ---
 
@@ -24,7 +24,7 @@ Without this workflow, a Hedera admin would need to manually freeze on Hedera *a
 graph TB
     subgraph "Hedera Network"
         HTS["🪙 KESY HTS Token<br/><i>0.0.7228099</i>"]
-        MN["🪞 Hedera Mirror Node<br/><i>testnet.mirrornode.hedera.com</i>"]
+        MN["🪞 Stablecoin SDK Server<br/><i>testnet.mirrornode.hedera.com</i>"]
         Admin["👤 Compliance Admin"]
     end
 
@@ -94,19 +94,20 @@ sequenceDiagram
 ### 1. Cron Trigger → Mirror Node Poll
 
 ```typescript
-// Fetch from Hedera Mirror Node inside DON consensus
-const frozenCount = runtime.runInNodeMode(
-    (nodeRuntime) => {
-        const httpClient = new cre.capabilities.HTTPClient();
-        const response = httpClient.sendRequest(nodeRuntime, {
-            url: `${config.hederaMirrorUrl}/api/v1/tokens/${config.hederaKesyTokenId}/balances`,
-            method: "GET",
-        }).result();
-        // Parse response and count frozen accounts
-        return accounts.length;
-    },
-    consensusMedianAggregation(),
-)().result();
+// Fetch from Stablecoin SDK Server inside DON consensus
+const frozenCount = runtime
+  .runInNodeMode((nodeRuntime) => {
+    const httpClient = new cre.capabilities.HTTPClient();
+    const response = httpClient
+      .sendRequest(nodeRuntime, {
+        url: `${config.hederaMirrorUrl}/api/v1/tokens/${config.hederaKesyTokenId}/balances`,
+        method: "GET",
+      })
+      .result();
+    // Parse response and count frozen accounts
+    return accounts.length;
+  }, consensusMedianAggregation())()
+  .result();
 ```
 
 ### 2. DON-Signed Report → EVM Delivery
@@ -114,25 +115,29 @@ const frozenCount = runtime.runInNodeMode(
 ```typescript
 // Encode rejectAddress(addr) calldata
 const calldata = encodeFunctionData({
-    abi: RejectPolicyABI,
-    functionName: "rejectAddress",
-    args: [frozenAddress],
+  abi: RejectPolicyABI,
+  functionName: "rejectAddress",
+  args: [frozenAddress],
 });
 
 // Generate DON-signed report
-const report = runtime.report({
+const report = runtime
+  .report({
     encodedPayload: hexToBase64(calldata),
     encoderName: "evm",
     signingAlgo: "ecdsa",
     hashingAlgo: "keccak256",
-}).result();
+  })
+  .result();
 
 // Deliver to RejectPolicy on Sepolia
-const resp = evmClient.writeReport(runtime, {
+const resp = evmClient
+  .writeReport(runtime, {
     receiver: config.rejectPolicyAddress,
     report: report,
     gasConfig: { gasLimit: "200000" },
-}).result();
+  })
+  .result();
 ```
 
 ---
@@ -151,13 +156,13 @@ const resp = evmClient.writeReport(runtime, {
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `schedule` | Cron expression (e.g., `*/300 * * * * *` = every 5 min) |
-| `hederaMirrorUrl` | Hedera Mirror Node base URL |
-| `hederaKesyTokenId` | KESY token ID on Hedera |
+| Field                  | Description                                              |
+| ---------------------- | -------------------------------------------------------- |
+| `schedule`             | Cron expression (e.g., `*/300 * * * * *` = every 5 min)  |
+| `hederaMirrorUrl`      | Stablecoin SDK Server base URL                           |
+| `hederaKesyTokenId`    | KESY token ID on Hedera                                  |
 | `sepoliaChainSelector` | CCIP chain selector for Sepolia (`16015286601757825753`) |
-| `rejectPolicyAddress` | Deployed ACE RejectPolicy on Sepolia |
+| `rejectPolicyAddress`  | Deployed ACE RejectPolicy on Sepolia                     |
 
 ---
 
@@ -199,7 +204,8 @@ cre workflow deploy ./kesy-bridge-workflow --target=staging-settings
 ### Current State (Hackathon)
 
 This workflow **demonstrates the full end-to-end pipeline**:
-1. ✅ CRE cron polls Hedera Mirror Node for freeze events
+
+1. ✅ CRE cron polls Stablecoin SDK Server for freeze events
 2. ✅ DON nodes reach consensus and sign a report
 3. ✅ `writeReport()` targets the correct chain (Sepolia) and contract (RejectPolicy)
 4. ⚠️ On-chain delivery would revert due to `onlyOwner` — the CRE Forwarder is not the owner
@@ -228,6 +234,7 @@ graph LR
 ```
 
 In production, a `ComplianceConsumer` contract would:
+
 1. Be deployed and set as the owner of `RejectPolicy`
 2. Implement `onReport()` to decode the DON-signed payload
 3. Call `rejectPolicy.rejectAddress(addr)` on behalf of the CRE DON
@@ -237,14 +244,14 @@ In production, a `ComplianceConsumer` contract would:
 
 ## Deployed Addresses
 
-| Contract | Chain | Address |
-|----------|-------|---------|
-| **PolicyEngine** | Sepolia | [`0x990D65f053c8Fa6Dfe43cF293534474B94F906a3`](https://sepolia.etherscan.io/address/0x990D65f053c8Fa6Dfe43cF293534474B94F906a3) |
-| **RejectPolicy** | Sepolia | [`0x366491aB0a574385B1795E24477D91BF2840c301`](https://sepolia.etherscan.io/address/0x366491aB0a574385B1795E24477D91BF2840c301) |
-| **VolumePolicy** | Sepolia | [`0xA2899CAa08977408792aE767799d2144B5112469`](https://sepolia.etherscan.io/address/0xA2899CAa08977408792aE767799d2144B5112469) |
-| **wKESY Token** | Sepolia | [`0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1`](https://sepolia.etherscan.io/address/0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1) |
-| **Spoke Bridge** | Sepolia | [`0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48`](https://sepolia.etherscan.io/address/0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48) |
-| **Hub Bridge** | Hedera Testnet | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
+| Contract         | Chain          | Address                                                                                                                         |
+| ---------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **PolicyEngine** | Sepolia        | [`0x990D65f053c8Fa6Dfe43cF293534474B94F906a3`](https://sepolia.etherscan.io/address/0x990D65f053c8Fa6Dfe43cF293534474B94F906a3) |
+| **RejectPolicy** | Sepolia        | [`0x366491aB0a574385B1795E24477D91BF2840c301`](https://sepolia.etherscan.io/address/0x366491aB0a574385B1795E24477D91BF2840c301) |
+| **VolumePolicy** | Sepolia        | [`0xA2899CAa08977408792aE767799d2144B5112469`](https://sepolia.etherscan.io/address/0xA2899CAa08977408792aE767799d2144B5112469) |
+| **wKESY Token**  | Sepolia        | [`0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1`](https://sepolia.etherscan.io/address/0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1) |
+| **Spoke Bridge** | Sepolia        | [`0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48`](https://sepolia.etherscan.io/address/0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48) |
+| **Hub Bridge**   | Hedera Testnet | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
 
 ---
 

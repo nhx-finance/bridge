@@ -18,14 +18,32 @@ import { encodeFunctionData, getAddress } from "viem";
 type Config = {
   schedule: string;
 
-  // Hedera Mirror Node
+  // Stablecoin SDK Server
   hederaMirrorUrl: string;
-  hederaKesyTokenId: string; // e.g. "0.0.7228099"
+  sdkServerUrl: string;
+  hederaKesyTokenId: string;
 
   // Sepolia Spoke
-  sepoliaChainSelector: string; // "16015286601757825753"
+  sepoliaChainSelector: string;
   rejectPolicyAddress: string; // ACE RejectPolicy on Sepolia
 };
+
+type Account = {
+  accountId: string;
+  evmAddress: string;
+  frozenDate: string | null;
+  freezeReason: string | null;
+  status: string;
+  isWiped: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type FrozenAccountResponse = {
+  recentFrozenOrWipedAccounts: Account[];
+};
+
+const SDK_API_KEY = "SDK_API_KEY";
 
 // ========================================
 // ABI for ACE RejectPolicy.rejectAddress
@@ -48,67 +66,46 @@ const RejectPolicyABI = [
 ] as const;
 
 // ========================================
-// HEDERA MIRROR NODE TYPES
-// ========================================
-interface HederaFreezeEvent {
-  consensus_timestamp: string;
-  token_id: string;
-  account: string;
-  freeze_status: string; // "FROZEN" or "UNFROZEN"
-}
-
-interface HederaMirrorResponse {
-  transactions: Array<{
-    consensus_timestamp: string;
-    entity_id: string;
-    type: string;
-    token_transfers?: Array<{
-      token_id: string;
-      account: string;
-    }>;
-    result: string;
-  }>;
-}
-
-// ========================================
-// WORKFLOW: Poll Hedera Mirror Node for
+// WORKFLOW: Poll our SDK Server for
 // freeze events and propagate to Sepolia
 // ACE RejectPolicy
 // ========================================
 
 /**
- * Main cron handler: Checks Hedera Mirror Node for recent
+ * Main cron handler: Checks SDK Server for recent
  * freeze/unfreeze events on the KESY token and propagates
  * them to the Sepolia ACE RejectPolicy.
  *
  * Flow:
  *   1. Cron triggers every N seconds
- *   2. Fetch recent freeze transactions from Hedera Mirror Node
+ *   2. Fetch recent freeze transactions from Stablecoin SDK Server
  *   3. For each frozen address, build a DON-signed report
  *   4. Deliver report to RejectPolicy.rejectAddress() on Sepolia
  */
 const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
   const config = runtime.config;
+  const secret = runtime.getSecret({ id: SDK_API_KEY }).result().value;
+  let frozenOrWipedAccounts: Account[] = [];
+  let calldatas: string[] = [];
 
   runtime.log("=== KESY Compliance Sync Workflow Triggered ===");
-  runtime.log(`Mirror Node: ${config.hederaMirrorUrl}`);
+  runtime.log(`SDK Server: ${config.sdkServerUrl}`);
   runtime.log(`KESY Token: ${config.hederaKesyTokenId}`);
   runtime.log(`RejectPolicy: ${config.rejectPolicyAddress}`);
 
   // ──────────────────────────────────────────────────────
-  // STEP 1: Fetch recent freeze events from Hedera Mirror Node
+  // STEP 1: Fetch recent freeze events from our SDK Server
   // ──────────────────────────────────────────────────────
 
-  runtime.log("\n[Step 1] Fetching freeze events from Hedera Mirror Node...");
+  runtime.log(
+    "\n[Step 1] Fetching recently frozen accounts from our SDK Server...",
+  );
 
-  // Use runInNodeMode for HTTP requests (requires consensus across DON nodes)
   const frozenAccounts = runtime
     .runInNodeMode((nodeRuntime: NodeRuntime<Config>) => {
       const httpClient = new cre.capabilities.HTTPClient();
 
-      // Query for recent token freeze/unfreeze transactions
-      // In production: filter by timestamp to only get events since last check
-      const url = `${config.hederaMirrorUrl}/api/v1/tokens/${config.hederaKesyTokenId}/balances?account.balance=0&limit=10`;
+      const url = config.sdkServerUrl;
 
       runtime.log(`Fetching: ${url}`);
 
@@ -116,27 +113,26 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
         .sendRequest(nodeRuntime, {
           url: url,
           method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${secret}`,
+          },
         })
         .result();
 
-      // Parse the response
       const body = new TextDecoder().decode(response.body);
-      const data = JSON.parse(body);
-
-      // Extract accounts with frozen status
-      // For demo: accounts with balance=0 are treated as potentially frozen
-      // In production: use /api/v1/accounts/{account}/tokens?token.id={tokenId}
-      // and check the freeze_status field
-      const accounts: string[] = [];
-      if (data.balances) {
-        for (const entry of data.balances) {
-          if (entry.balance === 0 && entry.account) {
-            accounts.push(entry.account);
-          }
-        }
+      const data = JSON.parse(body) as FrozenAccountResponse;
+      if (data.recentFrozenOrWipedAccounts.length === 0) {
+        runtime.log("No frozen accounts found in SDK Server response");
+        return 0;
       }
+      runtime.log(
+        `Received ${data.recentFrozenOrWipedAccounts.length} frozen accounts from SDK Server`,
+      );
 
-      return accounts.length;
+      frozenOrWipedAccounts = data.recentFrozenOrWipedAccounts;
+
+      return data.recentFrozenOrWipedAccounts.length;
     }, consensusMedianAggregation())()
     .result();
 
@@ -155,76 +151,77 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
     "\n[Step 2] Propagating freeze status to Sepolia ACE RejectPolicy...",
   );
 
-  // For demo purposes, we encode a sample rejectAddress call
-  // In production, this would iterate over each frozen EVM address
-  // and call rejectAddress(address) for each one
-  //
-  // Note: Hedera account IDs (0.0.xxxx) need to be mapped to their
-  // EVM alias addresses. This mapping comes from the Mirror Node API:
-  // GET /api/v1/accounts/{accountId} → evm_address field
+  frozenOrWipedAccounts.forEach((account, index) => {
+    runtime.log(
+      `Account ${index + 1}: ${account.evmAddress} | Status: ${account.status} | Frozen Date: ${account.frozenDate}`,
+    );
+    const evmAddress = `${account.evmAddress}` as `0x${string}`;
+    runtime.log(`Validating EVM address: ${evmAddress}`);
+    try {
+      const checksummedAddress = getAddress(evmAddress);
+      runtime.log(`Checksummed address: ${checksummedAddress}`);
+    } catch (error) {
+      runtime.log(`Invalid EVM address: ${evmAddress}. Skipping...`);
+      return;
+    }
+    const calldata = encodeFunctionData({
+      abi: RejectPolicyABI,
+      functionName: "rejectAddress",
+      args: [evmAddress],
+    });
+    runtime.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
+    calldatas.push(calldata);
 
-  // Example: Encode a rejectAddress call for a demo frozen address
-  const demoFrozenAddress = getAddress(
-    "0x0000000000000000000000000000000000000000",
-  );
-  const calldata = encodeFunctionData({
-    abi: RejectPolicyABI,
-    functionName: "rejectAddress",
-    args: [demoFrozenAddress],
+    // Generate DON-signed report containing the calldata
+    const reportResponse = runtime
+      .report({
+        encodedPayload: hexToBase64(calldata),
+        encoderName: "evm",
+        signingAlgo: "ecdsa",
+        hashingAlgo: "keccak256",
+      })
+      .result();
+
+    runtime.log("DON-signed report generated");
+
+    const evmClient = new cre.capabilities.EVMClient(
+      BigInt(config.sepoliaChainSelector),
+    );
+
+    const resp = evmClient
+      .writeReport(runtime, {
+        receiver: config.rejectPolicyAddress,
+        report: reportResponse,
+        gasConfig: {
+          gasLimit: "200000",
+        },
+      })
+      .result();
+    runtime.log("Transaction sent to Sepolia");
+    runtime.log("Error: " + resp.errorMessage || "No Errors in response");
+    runtime.log(
+      "Hash: " + resp.txHash?.toString() || "No Transaction Hash in response",
+    );
+    runtime.log(
+      "Status: " + resp.txStatus.toString() ||
+        "No Transaction Status in response",
+    );
+
+    const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
+
+    if (resp.txStatus !== TxStatus.SUCCESS) {
+      runtime.log(
+        `⚠️ Transaction failed: ${resp.errorMessage || "unknown error"}`,
+      );
+      return `Failed: ${resp.errorMessage}`;
+    }
+
+    runtime.log(`✅ RejectPolicy updated on Sepolia`);
+    runtime.log(`   Tx: ${txHash}`);
+    runtime.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
   });
 
-  runtime.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
-
-  // Generate DON-signed report containing the calldata
-  const reportResponse = runtime
-    .report({
-      encodedPayload: hexToBase64(calldata),
-      encoderName: "evm",
-      signingAlgo: "ecdsa",
-      hashingAlgo: "keccak256",
-    })
-    .result();
-
-  runtime.log("DON-signed report generated");
-
-  // Deliver to RejectPolicy on Sepolia via CRE Forwarder
-  const evmClient = new cre.capabilities.EVMClient(
-    BigInt(config.sepoliaChainSelector),
-  );
-
-  const resp = evmClient
-    .writeReport(runtime, {
-      receiver: config.rejectPolicyAddress,
-      report: reportResponse,
-      gasConfig: {
-        gasLimit: "200000",
-      },
-    })
-    .result();
-  runtime.log("Transaction sent to Sepolia");
-  runtime.log("Error: " + resp.errorMessage || "No Errors in response");
-  runtime.log(
-    "Hash: " + resp.txHash?.toString() || "No Transaction Hash in response",
-  );
-  runtime.log(
-    "Status: " + resp.txStatus.toString() ||
-      "No Transaction Status in response",
-  );
-
-  const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
-
-  if (resp.txStatus !== TxStatus.SUCCESS) {
-    runtime.log(
-      `⚠️ Transaction failed: ${resp.errorMessage || "unknown error"}`,
-    );
-    return `Failed: ${resp.errorMessage}`;
-  }
-
-  runtime.log(`✅ RejectPolicy updated on Sepolia`);
-  runtime.log(`   Tx: ${txHash}`);
-  runtime.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
-
-  return `Compliance sync complete. Tx: ${txHash}`;
+  return `Compliance sync complete. Txns: ${calldatas.length}`;
 };
 
 // ========================================

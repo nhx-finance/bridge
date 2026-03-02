@@ -1,5 +1,6 @@
 {
   "schedule": "*/300 * * * * *",
+  "sdkServerUrl": "https://sdk.definetlynotlocalhost.space/api/compliance/recent",
   "hederaMirrorUrl": "https://testnet.mirrornode.hedera.com",
   "hederaKesyTokenId": "0.0.7228867",
   "sepoliaChainSelector": "16015286601757825753",

@@ -9,6 +9,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "@chainlink/cre-sdk": "^1.0.9",
+    "@types/node": "^25.3.3",
     "viem": "^2.46.3"
   },
   "devDependencies": {
