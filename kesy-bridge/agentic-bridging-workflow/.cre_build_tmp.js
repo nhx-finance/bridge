@@ -10734,8 +10734,8 @@ var defaultLookup = new NetworkLookup({
   testnetBySelector,
   testnetBySelectorByFamily
 });
-function consensusMedianAggregation() {
-  return simpleConsensus(AggregationType.MEDIAN);
+function consensusIdenticalAggregation() {
+  return simpleConsensus(AggregationType.IDENTICAL);
 }
 
 class ConsensusImpl {
@@ -15760,12 +15760,12 @@ var onAgenticBridge = (runtime2, payload) => {
       const response2 = httpClient.sendRequest(nodeRuntime, {
         url: config.tenderlyRpcUrl,
         method: "POST",
-        body: new TextEncoder().encode(JSON.stringify({
+        body: Buffer.from(JSON.stringify({
           jsonrpc: "2.0",
           method: "eth_call",
           params: [{ to, data }, "latest"],
           id: 1
-        })),
+        })).toString("base64"),
         headers: { "Content-Type": "application/json" }
       }).result();
       const body = new TextDecoder().decode(response2.body);
@@ -15776,10 +15776,18 @@ var onAgenticBridge = (runtime2, payload) => {
     const senderRejected = ethCall(config.rejectPolicyAddress, rejectCalldata);
     const receiverRejected = ethCall(config.rejectPolicyAddress, receiverRejectCalldata);
     return `${balanceResult}|${senderRejected}|${receiverRejected}`;
-  }, consensusMedianAggregation())().result();
+  }, consensusIdenticalAggregation())().result();
   runtime2.log(`Pre-flight results: ${preflightResults}`);
   const [balanceHex, senderRejectedHex, receiverRejectedHex] = String(preflightResults).split("|");
-  const balance = balanceHex !== "error" ? BigInt(balanceHex) : BigInt(0);
+  const safeHexToBigInt = (hex) => {
+    const normalized = hex && hex !== "error" && hex.length > 2 ? hex : "0x0";
+    try {
+      return BigInt(normalized);
+    } catch {
+      return BigInt(0);
+    }
+  };
+  const balance = safeHexToBigInt(balanceHex);
   const senderBlacklisted = senderRejectedHex !== "error" && senderRejectedHex.endsWith("1");
   const receiverBlacklisted = receiverRejectedHex !== "error" && receiverRejectedHex.endsWith("1");
   const amountWei = BigInt(parseFloat(request.amount) * 1e6);
@@ -15790,6 +15798,13 @@ var onAgenticBridge = (runtime2, payload) => {
   runtime2.log(`Has sufficient balance: ${hasBalance}`);
   runtime2.log(`
 [Step 3] Simulating bridge transaction on Tenderly...`);
+  runtime2.log(`Bridge address: ${config.spokeBridgeAddress}`);
+  runtime2.log(`wKESY address: ${config.wKesyAddress}`);
+  runtime2.log(`Policy engine address: ${config.policyEngineAddress}`);
+  runtime2.log(`Reject policy address: ${config.rejectPolicyAddress}`);
+  runtime2.log(`Volume policy address: ${config.volumePolicyAddress}`);
+  runtime2.log(`Hub bridge address: ${config.hubBridgeAddress}`);
+  runtime2.log(`Amount: ${amountWei}`);
   const bridgeCalldata = encodeFunctionData({
     abi: BridgeABI,
     functionName: "bridgeKESY",
@@ -15804,88 +15819,31 @@ var onAgenticBridge = (runtime2, payload) => {
     const response2 = httpClient.sendRequest(nodeRuntime, {
       url: config.tenderlyRpcUrl,
       method: "POST",
-      body: new TextEncoder().encode(JSON.stringify({
+      body: Buffer.from(JSON.stringify({
         jsonrpc: "2.0",
-        method: "eth_call",
+        method: "eth_sendTransaction",
         params: [{
           from: request.senderAddress,
           to: config.spokeBridgeAddress,
           data: bridgeCalldata,
           gas: "0x7A120"
-        }, "latest"],
+        }],
         id: 2
-      })),
+      })).toString("base64"),
       headers: { "Content-Type": "application/json" }
     }).result();
     const body = new TextDecoder().decode(response2.body);
     return body;
-  }, consensusMedianAggregation())().result();
+  }, consensusIdenticalAggregation())().result();
   runtime2.log(`Simulation result: ${String(simResult).slice(0, 200)}...`);
   runtime2.log(`
-[Step 4] Sending simulation data to Gemini AI for analysis...`);
-  const analysisPrompt = `You are an AI assistant for the KESY cross-chain bridge system. Analyze this bridge simulation and provide a clear, user-friendly summary.
-
-## Bridge Request
-- Direction: ${request.sourceChain} → ${request.destChain}
-- Amount: ${request.amount} KESY (6 decimals)
-- Sender: ${request.senderAddress}
-- Receiver: ${request.receiverAddress}
-
-## Pre-flight Check Results
-- Sender wKESY Balance: ${formatUnits(balance, 6)} wKESY
-- Has Sufficient Balance: ${hasBalance}
-- Sender Blacklisted (ACE RejectPolicy): ${senderBlacklisted}
-- Receiver Blacklisted (ACE RejectPolicy): ${receiverBlacklisted}
-
-## Bridge Simulation (Tenderly Virtual TestNet)
-Raw result: ${String(simResult).slice(0, 500)}
-
-## System Context
-- This bridge uses Chainlink CCIP for cross-chain messaging
-- wKESY is protected by Chainlink ACE (Automated Compliance Engine)
-- ACE policies: RejectPolicy (address blacklist) + VolumePolicy (min/max transfer caps)
-- The bridge burns wKESY on Sepolia and unlocks native KESY on Hedera via CCIP
-
-## Instructions
-1. Summarize whether the bridge would succeed or fail
-2. If it would fail, explain exactly why (insufficient balance, blacklisted, policy violation, etc.)
-3. Estimate approximate costs (CCIP fee in LINK, gas costs)
-4. Provide a confidence level (high/medium/low) for the simulation accuracy
-5. If there are any compliance concerns, flag them clearly
-6. Keep the response conversational and under 200 words
-7. Use emojis sparingly for visual clarity`;
-  const geminiResponse = runtime2.runInNodeMode((nodeRuntime) => {
-    const httpClient = new cre.capabilities.HTTPClient;
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${config.geminiApiKey}`;
-    const response2 = httpClient.sendRequest(nodeRuntime, {
-      url: geminiUrl,
-      method: "POST",
-      body: new TextEncoder().encode(JSON.stringify({
-        contents: [{
-          parts: [{ text: analysisPrompt }]
-        }],
-        generationConfig: {
-          temperature: 0.3,
-          maxOutputTokens: 512
-        }
-      })),
-      headers: { "Content-Type": "application/json" }
-    }).result();
-    const body = new TextDecoder().decode(response2.body);
-    return body;
-  }, consensusMedianAggregation())().result();
-  let aiAnalysis = "Unable to parse AI response";
-  try {
-    const geminiData = JSON.parse(String(geminiResponse));
-    if (geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
-      aiAnalysis = geminiData.candidates[0].content.parts[0].text;
-    }
-  } catch {
-    aiAnalysis = `Raw AI response: ${String(geminiResponse).slice(0, 500)}`;
-  }
+[Step 4] Skipping Gemini AI analysis to save quota.`);
   runtime2.log(`
-[Step 5] Gemini Analysis:
-${aiAnalysis}`);
+=== TENDERLY SIMULATION RAW JSON ===`);
+  runtime2.log(String(simResult));
+  runtime2.log(`====================================
+`);
+  const aiAnalysis = "Gemini analysis skipped manually.";
   const response = JSON.stringify({
     status: "simulated",
     direction: `${request.sourceChain} → ${request.destChain}`,

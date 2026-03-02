@@ -10,4 +10,12 @@ staging-settings:
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
-    secrets-path: ""
+    secrets-path: "../secrets.yaml"
+
+tenderly-settings:
+  user-workflow:
+    workflow-name: "agentic-bridging-tenderly"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.tenderly.json"
+    secrets-path: "../secrets.yaml"

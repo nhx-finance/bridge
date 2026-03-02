@@ -12,3 +12,10 @@ remappings = [
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[rpc_endpoints]
+tenderly_sepolia = "${TENDERLY_VIRTUAL_TESTNET_RPC}"
+
+[etherscan]
+# Tenderly Virtual TestNet (Sepolia fork, chain ID 99911155111)
+tenderly_virtual_sepolia = { key = "${TENDERLY_ACCESS_KEY}", chain = 99911155111, url = "${TENDERLY_VIRTUAL_TESTNET_RPC}/verify" }

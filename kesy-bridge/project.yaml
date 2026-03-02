@@ -34,3 +34,9 @@ production-settings:
   rpcs:
     - chain-name: ethereum-testnet-sepolia
       url: https://ethereum-sepolia-rpc.publicnode.com
+
+# ==========================================================================
+tenderly-settings:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://virtual.sepolia.eu.rpc.tenderly.co/c640a03e-df8e-4623-b8ec-3ea24a78c592

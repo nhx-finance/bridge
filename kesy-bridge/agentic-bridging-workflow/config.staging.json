@@ -1,6 +1,5 @@
 {
-  "tenderlyRpcUrl": "https://virtual.sepolia.eu.rpc.tenderly.co/89c2c9b0-7c5d-4d62-a150-a5db8640c49e",
-  "geminiApiKey": "",
+  "tenderlyRpcUrl": "https://virtual.sepolia.eu.rpc.tenderly.co/c640a03e-df8e-4623-b8ec-3ea24a78c592",
   "spokeBridgeAddress": "0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48",
   "wKesyAddress": "0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1",
   "policyEngineAddress": "0x990D65f053c8Fa6Dfe43cF293534474B94F906a3",

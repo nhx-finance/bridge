@@ -15807,7 +15807,7 @@ var onUnfreezeTrigger = (runtime2, payload) => {
       message: resp.errorMessage || "unknown error"
     });
   }
-  runtime2.log(`✅ Address unrejectd on Sepolia: ${checksummedAddress}`);
+  runtime2.log(`✅ Address unrejected on Sepolia: ${checksummedAddress}`);
   runtime2.log(`   Tx: ${txHash}`);
   runtime2.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
   return JSON.stringify({
