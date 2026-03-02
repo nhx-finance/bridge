@@ -1,13 +1,16 @@
 import {
   cre,
   CronCapability,
+  HTTPCapability,
   handler,
   Runner,
   type Runtime,
   type NodeRuntime,
+  type HTTPPayload,
   TxStatus,
   hexToBase64,
   bytesToHex,
+  decodeJson,
   consensusMedianAggregation,
 } from "@chainlink/cre-sdk";
 import { encodeFunctionData, getAddress } from "viem";
@@ -18,14 +21,21 @@ import { encodeFunctionData, getAddress } from "viem";
 type Config = {
   schedule: string;
 
-  // Stablecoin SDK Server
   hederaMirrorUrl: string;
   sdkServerUrl: string;
   hederaKesyTokenId: string;
 
-  // Sepolia Spoke
   sepoliaChainSelector: string;
-  	complianceConsumerAddress: string;	// ComplianceConsumer on Sepolia (owns RejectPolicy)
+  complianceConsumerAddress: string;
+  authorizedEVMAddress: string;
+};
+
+// ========================================
+// HTTP Trigger Payload Type
+// ========================================
+type UnfreezePayload = {
+  evmAddress: string;
+  reason: string;
 };
 
 type Account = {
@@ -168,7 +178,6 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 		runtime.log(`Encoded processReport calldata: ${calldata.slice(0, 20)}...`);
     calldatas.push(calldata);
 
-    // Generate DON-signed report containing the calldata
     const reportResponse = runtime
       .report({
         encodedPayload: hexToBase64(calldata),
@@ -221,16 +230,115 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 };
 
 // ========================================
+// HTTP TRIGGER: On-demand address unfreeze
+// ========================================
+
+/**
+ * HTTP handler: Called by the compliance server to unreject an address.
+ *
+ * Flow:
+ *   1. Server POST → CRE Gateway (JWT-signed, authorized key)
+ *   2. CRE delivers payload.input to this handler
+ *   3. Handler encodes processReport(evmAddress, false) calldata
+ *   4. DON signs + delivers to ComplianceConsumer on Sepolia
+ *   5. ComplianceConsumer calls RejectPolicy.unrejectAddress()
+ *   6. Return value sent back to server as HTTP response
+ *
+ * Expected payload: { "evmAddress": "0x...", "reason": "..." }
+ */
+const onUnfreezeTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string => {
+  const config = runtime.config;
+  const request = decodeJson(payload.input) as UnfreezePayload;
+
+  runtime.log("=== KESY Unfreeze Trigger Received ===");
+  runtime.log(`Address to unreject: ${request.evmAddress}`);
+  runtime.log(`Reason: ${request.reason}`);
+
+  let checksummedAddress: string;
+  try {
+    checksummedAddress = getAddress(request.evmAddress as `0x${string}`);
+  } catch {
+    runtime.log(`❌ Invalid EVM address: ${request.evmAddress}`);
+    return JSON.stringify({ status: "error", message: `Invalid EVM address: ${request.evmAddress}` });
+  }
+
+  const calldata = encodeFunctionData({
+    abi: ComplianceConsumerABI,
+    functionName: "processReport",
+    args: [checksummedAddress as `0x${string}`, false],
+  });
+
+  runtime.log(`Encoded processReport(${checksummedAddress}, false) calldata: ${calldata.slice(0, 20)}...`);
+
+  const reportResponse = runtime
+    .report({
+      encodedPayload: hexToBase64(calldata),
+      encoderName: "evm",
+      signingAlgo: "ecdsa",
+      hashingAlgo: "keccak256",
+    })
+    .result();
+
+  runtime.log("DON-signed report generated");
+
+  const evmClient = new cre.capabilities.EVMClient(
+    BigInt(config.sepoliaChainSelector),
+  );
+
+  const resp = evmClient
+    .writeReport(runtime, {
+      receiver: config.complianceConsumerAddress,
+      report: reportResponse,
+      gasConfig: { gasLimit: "200000" },
+    })
+    .result();
+
+  const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
+
+  if (resp.txStatus !== TxStatus.SUCCESS) {
+    runtime.log(`⚠️ Unfreeze failed: ${resp.errorMessage || "unknown error"}`);
+    return JSON.stringify({
+      status: "error",
+      address: checksummedAddress,
+      message: resp.errorMessage || "unknown error",
+    });
+  }
+
+  runtime.log(`✅ Address unrejected on Sepolia: ${checksummedAddress}`);
+  runtime.log(`   Tx: ${txHash}`);
+  runtime.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
+
+  return JSON.stringify({
+    status: "success",
+    address: checksummedAddress,
+    reason: request.reason,
+    txHash,
+    etherscan: `https://sepolia.etherscan.io/tx/${txHash}`,
+  });
+};
+
+// ========================================
 // WORKFLOW INITIALIZATION
 // ========================================
 
 const initWorkflow = (config: Config) => {
   const cron = new CronCapability();
+  const http = new HTTPCapability();
 
   return [
+    // Trigger 1: Cron — polls SDK Server for freeze events every N seconds
     handler(
       cron.trigger({ schedule: config.schedule }),
       onComplianceSyncTrigger,
+    ),
+    // Trigger 2: HTTP — on-demand unfreeze called by compliance server
+    handler(
+      http.trigger(
+        config.authorizedEVMAddress
+          ? { authorizedKeys: [{ type: "KEY_TYPE_ECDSA_EVM", publicKey: config.authorizedEVMAddress }] }
+          : {},
+      ),
+      onUnfreezeTrigger,
     ),
   ];
 };

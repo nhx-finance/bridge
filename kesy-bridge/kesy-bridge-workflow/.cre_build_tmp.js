@@ -7104,6 +7104,11 @@ var LATEST_BLOCK_NUMBER = {
   absVal: Buffer.from([2]).toString("base64"),
   sign: "-1"
 };
+var decodeJson = (input) => {
+  const decoder = new TextDecoder("utf-8");
+  const textBody = decoder.decode(input);
+  return JSON.parse(textBody);
+};
 function sendReport(runtime, report, fn) {
   const rawReport = report.x_generatedCodeOnly_unwrap();
   const request = fn(rawReport);
@@ -15661,18 +15666,14 @@ var sendErrorResponse = (error) => {
 init_encodeFunctionData();
 init_getAddress();
 var SDK_API_KEY = "SDK_API_KEY";
-var RejectPolicyABI = [
+var ComplianceConsumerABI = [
   {
     type: "function",
-    name: "rejectAddress",
-    inputs: [{ name: "account", type: "address" }],
-    outputs: [],
-    stateMutability: "nonpayable"
-  },
-  {
-    type: "function",
-    name: "unrejectAddress",
-    inputs: [{ name: "account", type: "address" }],
+    name: "processReport",
+    inputs: [
+      { name: "account", type: "address" },
+      { name: "reject", type: "bool" }
+    ],
     outputs: [],
     stateMutability: "nonpayable"
   }
@@ -15685,7 +15686,7 @@ var onComplianceSyncTrigger = (runtime2) => {
   runtime2.log("=== KESY Compliance Sync Workflow Triggered ===");
   runtime2.log(`SDK Server: ${config.sdkServerUrl}`);
   runtime2.log(`KESY Token: ${config.hederaKesyTokenId}`);
-  runtime2.log(`RejectPolicy: ${config.rejectPolicyAddress}`);
+  runtime2.log(`ComplianceConsumer: ${config.complianceConsumerAddress}`);
   runtime2.log(`
 [Step 1] Fetching recently frozen accounts from our SDK Server...`);
   const frozenAccounts = runtime2.runInNodeMode((nodeRuntime) => {
@@ -15716,7 +15717,7 @@ var onComplianceSyncTrigger = (runtime2) => {
     return "No updates needed";
   }
   runtime2.log(`
-[Step 2] Propagating freeze status to Sepolia ACE RejectPolicy...`);
+[Step 2] Propagating freeze status to Sepolia ComplianceConsumer → RejectPolicy...`);
   frozenOrWipedAccounts.forEach((account, index) => {
     runtime2.log(`Account ${index + 1}: ${account.evmAddress} | Status: ${account.status} | Frozen Date: ${account.frozenDate}`);
     const evmAddress = `${account.evmAddress}`;
@@ -15729,11 +15730,11 @@ var onComplianceSyncTrigger = (runtime2) => {
       return;
     }
     const calldata = encodeFunctionData({
-      abi: RejectPolicyABI,
-      functionName: "rejectAddress",
-      args: [evmAddress]
+      abi: ComplianceConsumerABI,
+      functionName: "processReport",
+      args: [evmAddress, true]
     });
-    runtime2.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
+    runtime2.log(`Encoded processReport calldata: ${calldata.slice(0, 20)}...`);
     calldatas.push(calldata);
     const reportResponse = runtime2.report({
       encodedPayload: hexToBase64(calldata),
@@ -15744,7 +15745,7 @@ var onComplianceSyncTrigger = (runtime2) => {
     runtime2.log("DON-signed report generated");
     const evmClient = new cre.capabilities.EVMClient(BigInt(config.sepoliaChainSelector));
     const resp = evmClient.writeReport(runtime2, {
-      receiver: config.rejectPolicyAddress,
+      receiver: config.complianceConsumerAddress,
       report: reportResponse,
       gasConfig: {
         gasLimit: "200000"
@@ -15759,16 +15760,70 @@ var onComplianceSyncTrigger = (runtime2) => {
       runtime2.log(`⚠️ Transaction failed: ${resp.errorMessage || "unknown error"}`);
       return `Failed: ${resp.errorMessage}`;
     }
-    runtime2.log(`✅ RejectPolicy updated on Sepolia`);
+    runtime2.log(`✅ ComplianceConsumer → RejectPolicy updated on Sepolia`);
     runtime2.log(`   Tx: ${txHash}`);
     runtime2.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
   });
   return `Compliance sync complete. Txns: ${calldatas.length}`;
 };
+var onUnfreezeTrigger = (runtime2, payload) => {
+  const config = runtime2.config;
+  const request = decodeJson(payload.input);
+  runtime2.log("=== KESY Unfreeze Trigger Received ===");
+  runtime2.log(`Address to unreject: ${request.evmAddress}`);
+  runtime2.log(`Reason: ${request.reason}`);
+  let checksummedAddress;
+  try {
+    checksummedAddress = getAddress(request.evmAddress);
+  } catch {
+    runtime2.log(`❌ Invalid EVM address: ${request.evmAddress}`);
+    return JSON.stringify({ status: "error", message: `Invalid EVM address: ${request.evmAddress}` });
+  }
+  const calldata = encodeFunctionData({
+    abi: ComplianceConsumerABI,
+    functionName: "processReport",
+    args: [checksummedAddress, false]
+  });
+  runtime2.log(`Encoded processReport(${checksummedAddress}, false) calldata: ${calldata.slice(0, 20)}...`);
+  const reportResponse = runtime2.report({
+    encodedPayload: hexToBase64(calldata),
+    encoderName: "evm",
+    signingAlgo: "ecdsa",
+    hashingAlgo: "keccak256"
+  }).result();
+  runtime2.log("DON-signed report generated");
+  const evmClient = new cre.capabilities.EVMClient(BigInt(config.sepoliaChainSelector));
+  const resp = evmClient.writeReport(runtime2, {
+    receiver: config.complianceConsumerAddress,
+    report: reportResponse,
+    gasConfig: { gasLimit: "200000" }
+  }).result();
+  const txHash = resp.txHash ? bytesToHex(resp.txHash) : "pending";
+  if (resp.txStatus !== TxStatus.SUCCESS) {
+    runtime2.log(`⚠️ Unfreeze failed: ${resp.errorMessage || "unknown error"}`);
+    return JSON.stringify({
+      status: "error",
+      address: checksummedAddress,
+      message: resp.errorMessage || "unknown error"
+    });
+  }
+  runtime2.log(`✅ Address unrejectd on Sepolia: ${checksummedAddress}`);
+  runtime2.log(`   Tx: ${txHash}`);
+  runtime2.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
+  return JSON.stringify({
+    status: "success",
+    address: checksummedAddress,
+    reason: request.reason,
+    txHash,
+    etherscan: `https://sepolia.etherscan.io/tx/${txHash}`
+  });
+};
 var initWorkflow = (config) => {
   const cron = new CronCapability;
+  const http = new HTTPCapability;
   return [
-    handler(cron.trigger({ schedule: config.schedule }), onComplianceSyncTrigger)
+    handler(cron.trigger({ schedule: config.schedule }), onComplianceSyncTrigger),
+    handler(http.trigger(config.authorizedEVMAddress ? { authorizedKeys: [{ type: "KEY_TYPE_ECDSA_EVM", publicKey: config.authorizedEVMAddress }] } : {}), onUnfreezeTrigger)
   ];
 };
 async function main() {
