@@ -304,25 +304,24 @@ const onAgenticBridge = (runtime: Runtime<Config>, payload: HTTPPayload): string
 	runtime.log(String(simResult));
 	runtime.log("====================================\n");
 
-	const aiAnalysis = "Gemini analysis skipped manually.";
+	let aiAnalysis = "Gemini analysis skipped manually.";
 
-	/*
-	const analysisPrompt = \`You are an AI assistant for the KESY cross-chain bridge system. Analyze this bridge simulation and provide a clear, user-friendly summary.
+	const analysisPrompt = `You are an AI assistant for the KESY cross-chain bridge system. Analyze this bridge simulation and provide a clear, user-friendly summary.
 
 ## Bridge Request
-- Direction: \${request.sourceChain} → \${request.destChain}
-- Amount: \${request.amount} KESY (6 decimals)
-- Sender: \${request.senderAddress}
-- Receiver: \${request.receiverAddress}
+- Direction: ${request.sourceChain} → ${request.destChain}
+- Amount: ${request.amount} KESY (6 decimals)
+- Sender: ${request.senderAddress}
+- Receiver: ${request.receiverAddress}
 
 ## Pre-flight Check Results
-- Sender wKESY Balance: \${formatUnits(balance, 6)} wKESY
-- Has Sufficient Balance: \${hasBalance}
-- Sender Blacklisted (ACE RejectPolicy): \${senderBlacklisted}
-- Receiver Blacklisted (ACE RejectPolicy): \${receiverBlacklisted}
+- Sender wKESY Balance: ${formatUnits(balance, 6)} wKESY
+- Has Sufficient Balance: ${hasBalance}
+- Sender Blacklisted (ACE RejectPolicy): ${senderBlacklisted}
+- Receiver Blacklisted (ACE RejectPolicy): ${receiverBlacklisted}
 
 ## Bridge Simulation (Tenderly Virtual TestNet)
-Raw result: \${String(simResult).slice(0, 500)}
+Raw result: ${String(simResult).slice(0, 500)}
 
 ## System Context
 - This bridge uses Chainlink CCIP for cross-chain messaging
@@ -337,7 +336,7 @@ Raw result: \${String(simResult).slice(0, 500)}
 4. Provide a confidence level (high/medium/low) for the simulation accuracy
 5. If there are any compliance concerns, flag them clearly
 6. Keep the response conversational and under 200 words
-7. Use emojis sparingly for visual clarity\`;
+7. Use emojis sparingly for visual clarity`;
 
 	const geminiApiKey = runtime.getSecret({ id: GEMINI_API_KEY }).result().value;
 
@@ -345,7 +344,7 @@ Raw result: \${String(simResult).slice(0, 500)}
 		(nodeRuntime: NodeRuntime<Config>) => {
 			const httpClient = new cre.capabilities.HTTPClient();
 
-			const geminiUrl = \`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=\${geminiApiKey}\`;
+			const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`;
 
 			const response = httpClient.sendRequest(nodeRuntime, {
 				url: geminiUrl,
@@ -369,22 +368,21 @@ Raw result: \${String(simResult).slice(0, 500)}
 	)().result();
 
 	// Parse Gemini response
-	let aiAnalysis = "Unable to parse AI response";
+	aiAnalysis = "Unable to parse AI response";
 	try {
 		const geminiData = JSON.parse(String(geminiResponse));
 		if (geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
 			aiAnalysis = geminiData.candidates[0].content.parts[0].text;
 		} else if (geminiData.error) {
-			aiAnalysis = \`Gemini API error \${geminiData.error.code}: \${geminiData.error.message}\`;
+			aiAnalysis = `Gemini API error ${geminiData.error.code}: ${geminiData.error.message}`;
 		} else {
-			aiAnalysis = \`Unexpected Gemini response: \${String(geminiResponse).slice(0, 300)}\`;
+			aiAnalysis = `Unexpected Gemini response: ${String(geminiResponse).slice(0, 300)}`;
 		}
 	} catch {
-		aiAnalysis = \`Raw AI response (unparseable): \${String(geminiResponse).slice(0, 500)}\`;
+		aiAnalysis = `Raw AI response (unparseable): ${String(geminiResponse).slice(0, 500)}`;
 	}
 
-	runtime.log(\`\\n[Step 5] Gemini Analysis:\\n\${aiAnalysis}\`);
-	*/
+	runtime.log(`\n[Step 5] Gemini Analysis:\n${aiAnalysis}`);
 
 	// ──────────────────────────────────────────────────────
 	// STEP 5: Return structured response

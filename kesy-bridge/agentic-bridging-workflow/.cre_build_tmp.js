@@ -15662,6 +15662,7 @@ var sendErrorResponse = (error) => {
 };
 init_encodeFunctionData();
 init_getAddress();
+var GEMINI_API_KEY = "GEMINI_API_KEY";
 var BridgeABI = [
   {
     type: "function",
@@ -15843,7 +15844,75 @@ var onAgenticBridge = (runtime2, payload) => {
   runtime2.log(String(simResult));
   runtime2.log(`====================================
 `);
-  const aiAnalysis = "Gemini analysis skipped manually.";
+  let aiAnalysis = "Gemini analysis skipped manually.";
+  const analysisPrompt = `You are an AI assistant for the KESY cross-chain bridge system. Analyze this bridge simulation and provide a clear, user-friendly summary.
+
+## Bridge Request
+- Direction: ${request.sourceChain} → ${request.destChain}
+- Amount: ${request.amount} KESY (6 decimals)
+- Sender: ${request.senderAddress}
+- Receiver: ${request.receiverAddress}
+
+## Pre-flight Check Results
+- Sender wKESY Balance: ${formatUnits(balance, 6)} wKESY
+- Has Sufficient Balance: ${hasBalance}
+- Sender Blacklisted (ACE RejectPolicy): ${senderBlacklisted}
+- Receiver Blacklisted (ACE RejectPolicy): ${receiverBlacklisted}
+
+## Bridge Simulation (Tenderly Virtual TestNet)
+Raw result: ${String(simResult).slice(0, 500)}
+
+## System Context
+- This bridge uses Chainlink CCIP for cross-chain messaging
+- wKESY is protected by Chainlink ACE (Automated Compliance Engine)
+- ACE policies: RejectPolicy (address blacklist) + VolumePolicy (min/max transfer caps)
+- The bridge burns wKESY on Sepolia and unlocks native KESY on Hedera via CCIP
+
+## Instructions
+1. Summarize whether the bridge would succeed or fail
+2. If it would fail, explain exactly why (insufficient balance, blacklisted, policy violation, etc.)
+3. Estimate approximate costs (CCIP fee in LINK, gas costs)
+4. Provide a confidence level (high/medium/low) for the simulation accuracy
+5. If there are any compliance concerns, flag them clearly
+6. Keep the response conversational and under 200 words
+7. Use emojis sparingly for visual clarity`;
+  const geminiApiKey = runtime2.getSecret({ id: GEMINI_API_KEY }).result().value;
+  const geminiResponse = runtime2.runInNodeMode((nodeRuntime) => {
+    const httpClient = new cre.capabilities.HTTPClient;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${geminiApiKey}`;
+    const response2 = httpClient.sendRequest(nodeRuntime, {
+      url: geminiUrl,
+      method: "POST",
+      body: Buffer.from(JSON.stringify({
+        contents: [{
+          parts: [{ text: analysisPrompt }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 512
+        }
+      })).toString("base64"),
+      headers: { "Content-Type": "application/json" }
+    }).result();
+    const body = new TextDecoder().decode(response2.body);
+    return body;
+  }, consensusIdenticalAggregation())().result();
+  aiAnalysis = "Unable to parse AI response";
+  try {
+    const geminiData = JSON.parse(String(geminiResponse));
+    if (geminiData.candidates?.[0]?.content?.parts?.[0]?.text) {
+      aiAnalysis = geminiData.candidates[0].content.parts[0].text;
+    } else if (geminiData.error) {
+      aiAnalysis = `Gemini API error ${geminiData.error.code}: ${geminiData.error.message}`;
+    } else {
+      aiAnalysis = `Unexpected Gemini response: ${String(geminiResponse).slice(0, 300)}`;
+    }
+  } catch {
+    aiAnalysis = `Raw AI response (unparseable): ${String(geminiResponse).slice(0, 500)}`;
+  }
+  runtime2.log(`
+[Step 5] Gemini Analysis:
+${aiAnalysis}`);
   const response = JSON.stringify({
     status: "simulated",
     direction: `${request.sourceChain} → ${request.destChain}`,
