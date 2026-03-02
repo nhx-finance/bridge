@@ -92,15 +92,19 @@ forge script script/RecoverLink.s.sol --rpc-url $ETH_SEPOLIA_RPC_URL --broadcast
 
 ## ACE Compliance Management
 
-### Blacklist an address (RejectPolicy)
+RejectPolicy is owned by the **ComplianceConsumer** contract, which serves as the middleware for CRE DON report delivery.
+
+### Blacklist an address (via ComplianceConsumer)
 
 ```bash
-# Add address to reject list
-cast send $REJECT_POLICY "rejectAddress(address)" $TARGET_ADDRESS \
+COMPLIANCE_CONSUMER=0x6917e5902a2eadd13ba0008951e0af19746372bc
+
+# Add address to reject list (reject = true)
+cast send $COMPLIANCE_CONSUMER "processReport(address,bool)" $TARGET_ADDRESS true \
   --rpc-url $ETH_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY
 
-# Remove address from reject list
-cast send $REJECT_POLICY "unrejectAddress(address)" $TARGET_ADDRESS \
+# Remove address from reject list (reject = false)
+cast send $COMPLIANCE_CONSUMER "processReport(address,bool)" $TARGET_ADDRESS false \
   --rpc-url $ETH_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY
 
 # Check if address is rejected
@@ -139,6 +143,7 @@ cast send $VOLUME_POLICY "setMin(uint256)" 1000000 \
 | KESYExtractor | `0xaBCEf98127Da5DB87b41593E47a5d1a492bAA82b` |
 | wKESY | `0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1` |
 | Spoke Bridge | `0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48` |
+| ComplianceConsumer | `0x6917e5902a2eadd13ba0008951e0af19746372bc` |
 
 ### Old Contracts (deprecated)
 | Contract | Address | Status |

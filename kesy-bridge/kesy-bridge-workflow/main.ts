@@ -25,7 +25,7 @@ type Config = {
 
   // Sepolia Spoke
   sepoliaChainSelector: string;
-  rejectPolicyAddress: string; // ACE RejectPolicy on Sepolia
+  	complianceConsumerAddress: string;	// ComplianceConsumer on Sepolia (owns RejectPolicy)
 };
 
 type Account = {
@@ -46,23 +46,19 @@ type FrozenAccountResponse = {
 const SDK_API_KEY = "SDK_API_KEY";
 
 // ========================================
-// ABI for ACE RejectPolicy.rejectAddress
+// ABI for ComplianceConsumer.processReport
 // ========================================
-const RejectPolicyABI = [
-  {
-    type: "function",
-    name: "rejectAddress",
-    inputs: [{ name: "account", type: "address" }],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-  {
-    type: "function",
-    name: "unrejectAddress",
-    inputs: [{ name: "account", type: "address" }],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
+const ComplianceConsumerABI = [
+	{
+		type: "function",
+		name: "processReport",
+		inputs: [
+			{ name: "account", type: "address" },
+			{ name: "reject", type: "bool" },
+		],
+		outputs: [],
+		stateMutability: "nonpayable",
+	},
 ] as const;
 
 // ========================================
@@ -91,7 +87,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
   runtime.log("=== KESY Compliance Sync Workflow Triggered ===");
   runtime.log(`SDK Server: ${config.sdkServerUrl}`);
   runtime.log(`KESY Token: ${config.hederaKesyTokenId}`);
-  runtime.log(`RejectPolicy: ${config.rejectPolicyAddress}`);
+  	runtime.log(`ComplianceConsumer: ${config.complianceConsumerAddress}`);
 
   // ──────────────────────────────────────────────────────
   // STEP 1: Fetch recent freeze events from our SDK Server
@@ -139,7 +135,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
   runtime.log(`Found ${frozenAccounts} potentially frozen accounts`);
 
   // ──────────────────────────────────────────────────────
-  // STEP 2: If frozen accounts found, update RejectPolicy
+  	// STEP 2: If frozen accounts found, update ComplianceConsumer → RejectPolicy
   // ──────────────────────────────────────────────────────
 
   if (frozenAccounts === 0) {
@@ -147,9 +143,9 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
     return "No updates needed";
   }
 
-  runtime.log(
-    "\n[Step 2] Propagating freeze status to Sepolia ACE RejectPolicy...",
-  );
+  	runtime.log(
+		"\n[Step 2] Propagating freeze status to Sepolia ComplianceConsumer → RejectPolicy...",
+	);
 
   frozenOrWipedAccounts.forEach((account, index) => {
     runtime.log(
@@ -164,12 +160,12 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
       runtime.log(`Invalid EVM address: ${evmAddress}. Skipping...`);
       return;
     }
-    const calldata = encodeFunctionData({
-      abi: RejectPolicyABI,
-      functionName: "rejectAddress",
-      args: [evmAddress],
-    });
-    runtime.log(`Encoded rejectAddress calldata: ${calldata.slice(0, 20)}...`);
+		const calldata = encodeFunctionData({
+			abi: ComplianceConsumerABI,
+			functionName: "processReport",
+			args: [evmAddress, true],
+		});
+		runtime.log(`Encoded processReport calldata: ${calldata.slice(0, 20)}...`);
     calldatas.push(calldata);
 
     // Generate DON-signed report containing the calldata
@@ -190,7 +186,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
 
     const resp = evmClient
       .writeReport(runtime, {
-        receiver: config.rejectPolicyAddress,
+  			receiver: config.complianceConsumerAddress,
         report: reportResponse,
         gasConfig: {
           gasLimit: "200000",
@@ -216,7 +212,7 @@ const onComplianceSyncTrigger = (runtime: Runtime<Config>): string => {
       return `Failed: ${resp.errorMessage}`;
     }
 
-    runtime.log(`✅ RejectPolicy updated on Sepolia`);
+		runtime.log(`✅ ComplianceConsumer → RejectPolicy updated on Sepolia`);
     runtime.log(`   Tx: ${txHash}`);
     runtime.log(`   Verify: https://sepolia.etherscan.io/tx/${txHash}`);
   });

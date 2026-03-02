@@ -107,16 +107,18 @@ Policies are attached per `(contract address + function selector)` with specific
 flowchart LR
     A["Hedera Admin<br/>freezes account"] --> B["Mirror Node<br/>records event"]
     B --> C["CRE Workflow<br/>polls every 5 min"]
-    C --> D["RejectPolicy<br/>rejectAddress()"]
+    C --> CC["ComplianceConsumer<br/>processReport()"]
+    CC --> D["RejectPolicy<br/>rejectAddress()"]
     D --> E["wKESY.transfer()<br/>reverts for<br/>this address"]
 
     style A fill:#7C3AED,color:#fff
     style C fill:#0891B2,color:#fff
+    style CC fill:#059669,color:#fff
     style D fill:#DC2626,color:#fff
     style E fill:#D97706,color:#fff
 ```
 
-The CRE workflow monitors Hedera's Mirror Node for KESY freeze events and propagates them to the `RejectPolicy` on Sepolia. Currently, the `RejectPolicy.rejectAddress()` function is `onlyOwner`, so the CRE workflow's on-chain delivery targets the deployer address. In production, this would use a CRE Forwarder → ComplianceConsumer → RejectPolicy chain.
+The CRE workflow monitors Hedera's Mirror Node for KESY freeze events and propagates them to the `ComplianceConsumer` on Sepolia, which owns the `RejectPolicy` and calls `rejectAddress()`/`unrejectAddress()` on its behalf. This solves the `onlyOwner` constraint — the CRE Forwarder calls `ComplianceConsumer.processReport(address, bool)`, and the ComplianceConsumer (as the RejectPolicy owner) forwards to RejectPolicy.
 
 **Max propagation delay:** ~5 minutes (configurable via cron schedule)
 

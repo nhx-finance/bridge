@@ -41,7 +41,9 @@ graph TD
     PE -->|"extract()"| EX
     PE -->|"check account"| RP
     PE -->|"check amount"| VP
-    CRE -.->|"rejectAddress()"| RP
+    CRE -.->|"processReport()"| CC
+        CC["📋 ComplianceConsumer<br/><i>Owns RejectPolicy</i>"]
+        CC -.->|"rejectAddress()"| RP
 
     style HUB fill:#4F46E5,color:#fff
     style SPOKE fill:#059669,color:#fff
@@ -50,6 +52,7 @@ graph TD
     style RP fill:#DC2626,color:#fff
     style VP fill:#7C3AED,color:#fff
     style CRE fill:#0891B2,color:#fff
+    style CC fill:#059669,color:#fff
 ```
 
 ---
@@ -138,6 +141,6 @@ source .env && forge script script/DeploySepolia.s.sol --rpc-url $ETH_SEPOLIA_RP
 | **Transport** | CCIP Router-gated (`onlyRouter`) |
 | **Chain Auth** | Chain selector + sender address allowlisting |
 | **Compliance** | Chainlink ACE `PolicyEngine` + `RejectPolicy` + `VolumePolicy` |
-| **Automation** | CRE Workflow syncs Hedera freeze state to `RejectPolicy` |
+| **Automation** | CRE Workflow syncs Hedera freeze state to `RejectPolicy` via `ComplianceConsumer` |
 | **Token Access** | `MINTER_ROLE` / `BURNER_ROLE` restricted to bridge only |
 | **Upgradeable** | ACE policies deployed behind ERC1967 proxies |

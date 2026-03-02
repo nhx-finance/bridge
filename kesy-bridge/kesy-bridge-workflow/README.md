@@ -196,36 +196,15 @@ cre workflow deploy ./kesy-bridge-workflow --target=staging-settings
 
 ---
 
-## Design Considerations: CRE Forwarder & RejectPolicy Ownership
+## Architecture: CRE → ComplianceConsumer → RejectPolicy
 
-> [!IMPORTANT]
-> `RejectPolicy.rejectAddress()` is restricted to `onlyOwner`. In CRE's delivery model, the DON-signed report is submitted on-chain by a **CRE Forwarder contract** — not by your deployer EOA. Since the Forwarder is not the RejectPolicy owner, the call would revert on-chain.
-
-### Current State (Hackathon)
-
-This workflow **demonstrates the full end-to-end pipeline**:
-
-1. ✅ CRE cron polls Stablecoin SDK Server for freeze events
-2. ✅ DON nodes reach consensus and sign a report
-3. ✅ `writeReport()` targets the correct chain (Sepolia) and contract (RejectPolicy)
-4. ⚠️ On-chain delivery would revert due to `onlyOwner` — the CRE Forwarder is not the owner
-
-For demo purposes, the deployer EOA can manually call `rejectAddress()` via `cast`:
-
-```bash
-# Manually blacklist an address (deployer is the owner)
-cast send 0x366491aB0a574385B1795E24477D91BF2840c301 \
-  "rejectAddress(address)" <TARGET_ADDRESS> \
-  --rpc-url $ETH_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY
-```
-
-### Production Path
+`RejectPolicy.rejectAddress()` is restricted to `onlyOwner`. The CRE DON delivers signed reports via a **CRE Forwarder contract** — not the deployer EOA. To solve this, the `ComplianceConsumer` contract owns the `RejectPolicy` and acts as middleware:
 
 ```mermaid
 graph LR
-    DON["DON Nodes"] -->|"signed report"| FWD["CRE Forwarder"]
-    FWD -->|"onReport()"| CC["ComplianceConsumer<br/><i>owns RejectPolicy</i>"]
-    CC -->|"rejectAddress()"| RP["RejectPolicy"]
+    DON["CRE DON"] -->|"signed report"| FWD["CRE Forwarder"]
+    FWD -->|"processReport(addr, true)"| CC["ComplianceConsumer<br/><code>0x6917...72bc</code><br/><i>owns RejectPolicy</i>"]
+    CC -->|"rejectAddress(addr)"| RP["RejectPolicy<br/><code>0x3664...01</code>"]
 
     style DON fill:#0891B2,color:#fff
     style FWD fill:#7C3AED,color:#fff
@@ -233,25 +212,33 @@ graph LR
     style RP fill:#DC2626,color:#fff
 ```
 
-In production, a `ComplianceConsumer` contract would:
+| Function | Description |
+|----------|-------------|
+| `processReport(address, bool)` | `true` → reject, `false` → unreject |
+| `batchProcessReport(address[], bool)` | Batch reject/unreject multiple addresses |
+| `isRejected(address)` | Check rejection status |
+| `setRejectPolicy(address)` | Admin: update policy address |
 
-1. Be deployed and set as the owner of `RejectPolicy`
-2. Implement `onReport()` to decode the DON-signed payload
-3. Call `rejectPolicy.rejectAddress(addr)` on behalf of the CRE DON
-4. This makes the entire flow trustless — no EOA in the loop
+```bash
+# Reject an address via ComplianceConsumer
+cast send 0x6917e5902a2eadd13ba0008951e0af19746372bc \
+  "processReport(address,bool)" <TARGET_ADDRESS> true \
+  --rpc-url $ETH_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY
+```
 
 ---
 
 ## Deployed Addresses
 
-| Contract         | Chain          | Address                                                                                                                         |
-| ---------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **PolicyEngine** | Sepolia        | [`0x990D65f053c8Fa6Dfe43cF293534474B94F906a3`](https://sepolia.etherscan.io/address/0x990D65f053c8Fa6Dfe43cF293534474B94F906a3) |
-| **RejectPolicy** | Sepolia        | [`0x366491aB0a574385B1795E24477D91BF2840c301`](https://sepolia.etherscan.io/address/0x366491aB0a574385B1795E24477D91BF2840c301) |
-| **VolumePolicy** | Sepolia        | [`0xA2899CAa08977408792aE767799d2144B5112469`](https://sepolia.etherscan.io/address/0xA2899CAa08977408792aE767799d2144B5112469) |
-| **wKESY Token**  | Sepolia        | [`0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1`](https://sepolia.etherscan.io/address/0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1) |
-| **Spoke Bridge** | Sepolia        | [`0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48`](https://sepolia.etherscan.io/address/0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48) |
-| **Hub Bridge**   | Hedera Testnet | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
+| Contract | Chain | Address |
+|----------|-------|---------|
+| **PolicyEngine** | Sepolia | [`0x990D65f053c8Fa6Dfe43cF293534474B94F906a3`](https://sepolia.etherscan.io/address/0x990D65f053c8Fa6Dfe43cF293534474B94F906a3) |
+| **RejectPolicy** | Sepolia | [`0x366491aB0a574385B1795E24477D91BF2840c301`](https://sepolia.etherscan.io/address/0x366491aB0a574385B1795E24477D91BF2840c301) |
+| **ComplianceConsumer** | Sepolia | [`0x6917e5902a2eadd13ba0008951e0af19746372bc`](https://sepolia.etherscan.io/address/0x6917e5902a2eadd13ba0008951e0af19746372bc) |
+| **VolumePolicy** | Sepolia | [`0xA2899CAa08977408792aE767799d2144B5112469`](https://sepolia.etherscan.io/address/0xA2899CAa08977408792aE767799d2144B5112469) |
+| **wKESY Token** | Sepolia | [`0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1`](https://sepolia.etherscan.io/address/0xa3CC176553fbCe4Bb1270752d9c75464d21F6ba1) |
+| **Spoke Bridge** | Sepolia | [`0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48`](https://sepolia.etherscan.io/address/0x4B0D9839db5962022E17fa8d61F3b6Ac8BB82a48) |
+| **Hub Bridge** | Hedera Testnet | [`0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38`](https://hashscan.io/testnet/contract/0xD27c613C9d8D52C7E0BAE118562fB6cae7cC3A38) |
 
 ---
 
