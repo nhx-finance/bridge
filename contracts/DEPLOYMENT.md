@@ -1,5 +1,10 @@
 # KESY OmniBridge — Deployment Guide
 
+### 🚀 Agentic Workflow Links
+- **[Cron Automation (CRE)](https://github.com/nhx-finance/bridge/blob/main/kesy-bridge/kesy-bridge-workflow/main.ts)**
+- **[AI Simulation (Tenderly)](https://github.com/nhx-finance/bridge/blob/main/kesy-bridge/agentic-bridging-workflow/main.ts)**
+
+
 ## Prerequisites
 
 - Foundry (`forge`, `cast`)

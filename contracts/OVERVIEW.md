@@ -4,6 +4,11 @@
 
 KESY is a **regulated stablecoin** issued as a native **HTS (Hedera Token Service) token** on Hedera. We've built a production-grade cross-chain bridge to bring it to EVM chains using Chainlink CCIP — with full compliance enforcement via the real **Chainlink ACE (Automated Compliance Engine)** and automated state sync via **CRE (Chainlink Runtime Environment)**.
 
+### 🤖 Agentic Infrastructure
+- **[CRE Compliance Sync (Cron)](https://github.com/nhx-finance/bridge/blob/main/kesy-bridge/kesy-bridge-workflow/main.ts)**
+- **[Tenderly AI Simulation](https://github.com/nhx-finance/bridge/blob/main/kesy-bridge/agentic-bridging-workflow/main.ts)**
+
+
 ---
 
 ## Architecture: Hub-and-Spoke via CCIP Arbitrary Messaging

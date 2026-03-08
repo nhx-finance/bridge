@@ -4,6 +4,11 @@
 
 KESY is a regulated stablecoin issued as a native HTS token on Hedera. The OmniBridge brings it to EVM chains via Chainlink CCIP, with full compliance enforcement via **Chainlink ACE (Automated Compliance Engine)** and automated state sync via **CRE (Chainlink Runtime Environment)**.
 
+### 🔗 Codebase Deep-Links
+- **[Cron Trigger Implementation](https://github.com/nhx-finance/bridge/blob/main/kesy-bridge/kesy-bridge-workflow/main.ts)**
+- **[Tenderly AI Integration Agent](https://github.com/nhx-finance/bridge/blob/main/kesy-bridge/agentic-bridging-workflow/main.ts)**
+
+
 ---
 
 ## Hub-and-Spoke Model
